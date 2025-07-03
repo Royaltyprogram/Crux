@@ -10,4 +10,4 @@ This document serves as a showcase of Crux's unique approach and innovative prob
 
 ---
 
-Details coming soon: [tooliense.com](https://tooliense.com)
+Details coming soon: [cruxai.ai](https://cruxai.ai)
