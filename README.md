@@ -57,7 +57,7 @@
 - **1+ hour** of continuous problem-solving
 - **Complete mathematical proof** with rigorous methodology
 
-📄 **[View Solution](2025_USAMO_p6.pdf)** - The final output showcasing Crux's unique approach to complex mathematical problems.
+📄 **[View Solution](./2025USAMO/2025_USAMO_p6.pdf)** - The final output showcasing Crux's unique approach to complex mathematical problems.
 
 ### 🔬 Independent TTRL Hypothesis Verification
 
@@ -73,7 +73,7 @@
 - ✅ **δ-bookkeeping methodology** for practical implementation
 - ✅ **Research-grade theoretical foundations** matching peer-reviewed standards
 
-📄 **[View Research](TTRL-paper.pdf)** - Complete independent mathematical derivation and analysis.
+📄 **[View Research](./arXiv/TTRL-paper.pdf)** - Complete independent mathematical derivation and analysis.
 
 > **Paradigm Shift**: Crux doesn't just reproduce existing work—it conducts **original mathematical discovery** through autonomous reasoning.
 
@@ -114,13 +114,13 @@
 
 ### USAMO Problem Solving Process
 
-<img width="100%" alt="USAMO Solution Process" src="./Demo.mp4">
+<img width="100%" alt="USAMO Solution Process" src="./2025USAMO/Demo.mp4">
 
 _Watch how Crux approaches and solves complex mathematical competition problems with systematic reasoning._
 
 ### Independent Mathematical Research
 
-<img width="100%" alt="Research Process" src="./TTRL-paper.pdf">
+<img width="100%" alt="Research Process" src="./arXiv/TTRL-paper.pdf">
 
 _Explore Crux's autonomous derivation of mathematical frameworks from basic hypotheses._
 
