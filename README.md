@@ -8,7 +8,7 @@
 [![Demo](https://img.shields.io/badge/🎬_Demo-Watch_Now-FF6B6B?style=for-the-badge&logoColor=white)](Demo.mp4)
 [![Community](https://img.shields.io/badge/💬_Community-Join_Us-50C878?style=for-the-badge&logoColor=white)](#)
 
-<img src="./crux-github-banner.png" alt="Crux AI Banner" width="100%" style="border-radius: 15px; box-shadow: 0 8px 32px rgba(0,0,0,0.1);">
+<img src="./assets/crux-github-banner.png" alt="Crux AI Banner" width="100%" style="border-radius: 15px; box-shadow: 0 8px 32px rgba(0,0,0,0.1);">
 
 ---
 
