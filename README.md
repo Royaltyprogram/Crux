@@ -120,20 +120,7 @@
 - Systematic lemma development
 - Mathematical framework derivation
 
-## Demo & Examples
-
-### USAMO Problem Solving Process
-
-<img width="100%" alt="USAMO Solution Process" src="./2025USAMO/Demo.mp4">
-
-_Watch how Crux approaches and solves complex mathematical competition problems with systematic reasoning._
-
-### Independent Mathematical Research
-
-<img width="100%" alt="Research Process" src="./arXiv/TTRL-paper.pdf">
-
-_Explore Crux's autonomous derivation of mathematical frameworks from basic hypotheses._
-
+  
 ## Technical Specifications
 
 **Problem Solving Capability:**
