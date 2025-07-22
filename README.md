@@ -67,12 +67,8 @@
 - **9,000+ lines** of internal reasoning
 - **1+ hour** of continuous problem-solving
 - **Complete mathematical proof** with rigorous methodology
-<<<<<<< HEAD
-- 📄 **[View Solution](./2025USAMO/2025_USAMO_p6.pdf)**
-=======
 
 📄 **[View Solution](./2025USAMO/2025_USAMO_p6.pdf)** - The final output showcasing Crux's unique approach to complex mathematical problems.
->>>>>>> bf0ba4f4b031fb9cea9c4cf04b116ed204bad674
 
 ### 🔬 Independent TTRL Hypothesis Verification
 **Starting from only the hypothesis**, Crux autonomously derived:
@@ -82,13 +78,11 @@
 - ✅ **Research-grade theoretical foundations** matching peer-reviewed standards
 - 📄 **[View Research](./arXiv/TTRL-paper.pdf)**
 
-<<<<<<< HEAD
 ### 🏗️ Enhanced Multi-Layer Agent Architecture
 - **Hierarchical orchestration** inspired by graduate school research structures
 - **Recursive depth capabilities** for arbitrarily complex problems
 - **Dynamic specialist allocation** based on problem complexity
 - **Proven scaling behavior** similar to deep neural networks
-=======
 📄 **[View Research](./arXiv/TTRL-paper.pdf)** - Complete independent mathematical derivation and analysis.
 
 > **Paradigm Shift**: Crux doesn't just reproduce existing work—it conducts **original mathematical discovery** through autonomous reasoning.
@@ -181,7 +175,6 @@ We welcome contributions to advancing AI-driven mathematical research! Feel free
 ## About Tooliense
 
 **Our mission is to push the boundaries of AI-driven research and mathematical discovery.** Crux represents a breakthrough in autonomous mathematical reasoning. Visit [tooliense.com](https://tooliense.com) to learn more about our research initiatives.
->>>>>>> bf0ba4f4b031fb9cea9c4cf04b116ed204bad674
 
 ---
 
