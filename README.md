@@ -67,7 +67,12 @@
 - **9,000+ lines** of internal reasoning
 - **1+ hour** of continuous problem-solving
 - **Complete mathematical proof** with rigorous methodology
+<<<<<<< HEAD
 - 📄 **[View Solution](./2025USAMO/2025_USAMO_p6.pdf)**
+=======
+
+📄 **[View Solution](./2025USAMO/2025_USAMO_p6.pdf)** - The final output showcasing Crux's unique approach to complex mathematical problems.
+>>>>>>> bf0ba4f4b031fb9cea9c4cf04b116ed204bad674
 
 ### 🔬 Independent TTRL Hypothesis Verification
 **Starting from only the hypothesis**, Crux autonomously derived:
@@ -77,11 +82,106 @@
 - ✅ **Research-grade theoretical foundations** matching peer-reviewed standards
 - 📄 **[View Research](./arXiv/TTRL-paper.pdf)**
 
+<<<<<<< HEAD
 ### 🏗️ Enhanced Multi-Layer Agent Architecture
 - **Hierarchical orchestration** inspired by graduate school research structures
 - **Recursive depth capabilities** for arbitrarily complex problems
 - **Dynamic specialist allocation** based on problem complexity
 - **Proven scaling behavior** similar to deep neural networks
+=======
+📄 **[View Research](./arXiv/TTRL-paper.pdf)** - Complete independent mathematical derivation and analysis.
+
+> **Paradigm Shift**: Crux doesn't just reproduce existing work—it conducts **original mathematical discovery** through autonomous reasoning.
+
+## Core Capabilities
+
+| Feature                       | Description                                           |
+| ----------------------------- | ----------------------------------------------------- |
+| 🧮 **Mathematical Reasoning** | Deep mathematical understanding with proof generation |
+| 🔍 **Problem Analysis**       | Systematic breakdown of complex mathematical problems |
+| 📊 **Theoretical Framework**  | Independent development of mathematical theories      |
+| 🎯 **USAMO-Level Solutions**  | Solving competition-grade mathematical problems       |
+| 🔬 **Research Methodology**   | Autonomous mathematical research and discovery        |
+
+## Key Research Areas
+
+### Mathematics & Problem Solving
+
+- Competition mathematics (USAMO, IMO level)
+- Abstract algebra and number theory
+- Combinatorics and graph theory
+- Mathematical analysis and proofs
+
+### Theoretical AI Research
+
+- Test-Time Reinforcement Learning (TTRL)
+- Mathematical reasoning architectures
+- Autonomous theorem proving
+- AI-driven mathematical discovery
+
+### Research Methodology
+
+- Independent hypothesis verification
+- Rigorous proof construction
+- Systematic lemma development
+- Mathematical framework derivation
+
+## Demo & Examples
+
+### USAMO Problem Solving Process
+
+<img width="100%" alt="USAMO Solution Process" src="./2025USAMO/Demo.mp4">
+
+_Watch how Crux approaches and solves complex mathematical competition problems with systematic reasoning._
+
+### Independent Mathematical Research
+
+<img width="100%" alt="Research Process" src="./arXiv/TTRL-paper.pdf">
+
+_Explore Crux's autonomous derivation of mathematical frameworks from basic hypotheses._
+
+## Technical Specifications
+
+**Problem Solving Capability:**
+
+- **Input**: Mathematical problems, hypotheses, research questions
+- **Processing**: 9,000+ lines of internal reasoning
+- **Output**: Complete solutions with rigorous proofs
+- **Time**: 1+ hours for complex problems
+
+**Research Methodology:**
+
+- Systematic lemma development
+- Convergence proof construction
+- Independent framework derivation
+- Peer-reviewed quality standards
+
+## Research Impact
+
+![Research Analytics](https://img.shields.io/badge/Lines%20of%20Reasoning-9000%2B-brightgreen?style=flat-square)
+![Problem Difficulty](https://img.shields.io/badge/Problem%20Level-USAMO-red?style=flat-square)
+![Research Quality](https://img.shields.io/badge/Quality-Peer%20Reviewed-blue?style=flat-square)
+
+## Contributing to Research
+
+We welcome contributions to advancing AI-driven mathematical research! Feel free to:
+
+- 🔬 Propose new mathematical challenges
+- 📊 Share research insights and methodologies
+- 🧮 Contribute to theoretical frameworks
+- 📚 Help document research findings
+
+### Research Timeline
+
+- **Current**: Advanced mathematical reasoning and problem solving
+- **Q1 2025**: Expanded theoretical framework development
+- **Q2 2025**: Multi-domain mathematical applications
+- **Future**: Revolutionary advances in AI-driven mathematical discovery
+
+## About Tooliense
+
+**Our mission is to push the boundaries of AI-driven research and mathematical discovery.** Crux represents a breakthrough in autonomous mathematical reasoning. Visit [tooliense.com](https://tooliense.com) to learn more about our research initiatives.
+>>>>>>> bf0ba4f4b031fb9cea9c4cf04b116ed204bad674
 
 ---
 
