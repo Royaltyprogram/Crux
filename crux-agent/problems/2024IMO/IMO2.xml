@@ -1,0 +1,6 @@
+Problem 2. Determine all pairs (a, b) of positive integers for which there exist positive integers g
+and N such that
+gcd(a
+n + b, bn + a) = g
+holds for all integers n ⩾ N. (Note that gcd(x, y) denotes the greatest common divisor of integers x
+and y.)

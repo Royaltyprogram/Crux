@@ -1,0 +1,171 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* latin-ext */
+@font-face {
+  font-family: "Courier Prime";
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/courierprime/v10/u-450q2lgwslOqpF_6gQ8kELaw9pWs39pvnRPA.woff2)
+    format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* latin */
+@font-face {
+  font-family: "Courier Prime";
+  font-style: normal;
+  font-weight: 400;
+  src: url(https://fonts.gstatic.com/s/courierprime/v10/u-450q2lgwslOqpF_6gQ8kELawFpWs39pvk.woff2)
+    format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* latin-ext */
+@font-face {
+  font-family: "Courier Prime";
+  font-style: normal;
+  font-weight: 700;
+  src: url(https://fonts.gstatic.com/s/courierprime/v10/u-4k0q2lgwslOqpF_6gQ8kELY7pMT-7fq9PrNX2-Ag.woff2)
+    format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* latin */
+@font-face {
+  font-family: "Courier Prime";
+  font-style: normal;
+  font-weight: 700;
+  src: url(https://fonts.gstatic.com/s/courierprime/v10/u-4k0q2lgwslOqpF_6gQ8kELY7pMT-Dfq9PrNX0.woff2)
+    format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 0%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 0%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 0%;
+    --primary: 0 0% 0%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 96%;
+    --secondary-foreground: 0 0% 0%;
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 40%;
+    --accent: 0 0% 96%;
+    --accent-foreground: 0 0% 0%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 80%;
+    --input: 0 0% 80%;
+    --ring: 0 0% 0%;
+    --radius: 0rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: "Courier Prime", "Courier New", monospace;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #000;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #333;
+}
+
+/* KaTeX 스타일 override for prose class */
+.prose .katex {
+  font-size: inherit !important;
+  color: inherit !important;
+  font-family: 'KaTeX_Main', 'Times New Roman', serif !important;
+}
+
+.prose .katex-display {
+  margin: 1rem 0 !important;
+  text-align: center !important;
+  display: block !important;
+}
+
+.prose .katex .katex-html {
+  color: inherit !important;
+}
+
+.prose .katex-display > .katex {
+  display: inline-block !important;
+}
+
+/* 인라인 수식 스타일 */
+.prose .katex-mathml {
+  position: absolute;
+  clip: rect(1px, 1px, 1px, 1px);
+  padding: 0;
+  border: 0;
+  height: 1px;
+  width: 1px;
+  overflow: hidden;
+}
+
+/* 블록 수식 스타일 */
+.prose .katex-display .katex {
+  text-align: center !important;
+}
+
+/* KaTeX 요소들이 prose 스타일을 무시하도록 */
+.prose .katex * {
+  all: revert !important;
+}
+
+.prose .katex .katex-html * {
+  color: inherit !important;
+}
+
+/* 수식 내부 요소들 */
+.prose .katex .mord,
+.prose .katex .mbin,
+.prose .katex .mrel,
+.prose .katex .mop,
+.prose .katex .mopen,
+.prose .katex .mclose,
+.prose .katex .mpunct,
+.prose .katex .mspace,
+.prose .katex .minner {
+  color: inherit !important;
+}
+
+/* 수식 오류 메시지 스타일 */
+.prose .katex-error {
+  color: #cc0000 !important;
+  background-color: #ffcccc !important;
+  padding: 2px 4px !important;
+  border-radius: 2px !important;
+  font-family: monospace !important;
+}

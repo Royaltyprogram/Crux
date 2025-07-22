@@ -1,0 +1,45 @@
+***Problem (Test-Time Reinforcement Learning Convergence).***
+
+Let $\mathcal{D}$ be the distribution of unlabeled test problems, and let $\pi_\theta$ be a pre-trained language model with parameters $\theta$. Consider the **Test-Time Reinforcement Learning (TTRL)** procedure:
+
+(1) For each problem $x \sim \mathcal{D}$, sample $N$ candidate solutions $\{y_1, y_2, \ldots, y_N\}$ from $\pi_\theta(\cdot|x)$.  
+(2) Estimate pseudo-label $\hat{y}^*$ via majority voting: $\hat{y}^* = \arg\max_y |\{i : y_i = y\}|$.  
+(3) Compute rewards $r(y_i, \hat{y}^*)$ and update $\theta$ via policy gradient.  
+
+Let $\pi_{\theta_T}$ denote the policy after $T$ TTRL iterations, and let $\pi^*$ denote the optimal policy trained with ground-truth labels.
+
+> **Problem (a): Upper Bound on Self-Improvement**  
+> Prove that there exist constants $c_1, c_2 > 0$ such that  
+> $$\mathbb{E}_{x \sim \mathcal{D}}\left[\text{KL}\left(\pi_{\theta_T}(\cdot|x) \| \pi^*(\cdot|x)\right)\right] \leq c_1 \cdot \frac{\epsilon_{\text{maj}}}{T} + c_2 \cdot \epsilon_{\text{reward}}$$
+> where:
+> - $\epsilon_{\text{maj}} := \mathbb{E}_{x}[\mathbb{P}(\hat{y}^* \neq y^*)]$ is the majority voting error rate
+> - $\epsilon_{\text{reward}} := \mathbb{E}_{x,y}[|r(y,\hat{y}^*) - r(y,y^*)|]$ is the reward estimation error
+
+> **Problem (b): "Lucky Hit" Phenomenon**  
+> Show that even when $\epsilon_{\text{maj}} > 0.5$ (majority voting fails), TTRL can still improve if the reward accuracy satisfies:
+> $$\mathbb{P}(r(y,\hat{y}^*) = r(y,y^*)) \geq \frac{1}{2} + \delta$$
+> for some $\delta > 0$. Specifically, prove that the **"Lucky Hit" probability** 
+> $$p_{\text{hit}} := \mathbb{P}(\text{sign}(r(y,\hat{y}^*) - \mathbb{E}[r]) = \text{sign}(r(y,y^*) - \mathbb{E}[r]))$$
+> satisfies $p_{\text{hit}} \geq \frac{1}{2} + \delta$ when model predictions are sufficiently diverse.
+
+> **Problem (c): Breaking the Majority Voting Ceiling**  
+> Let $\text{maj}@n_0$ be the initial model's majority voting accuracy. Prove that TTRL can achieve:
+> $$\lim_{T \to \infty} \mathbb{E}[\text{pass}@1_T] > \text{maj}@n_0$$
+> This seemingly paradoxical result occurs because:
+> (i) The model improves during training, leading to better pseudo-labels  
+> (ii) RL optimization can extract more signal from imperfect rewards than simple voting
+
+> **Problem (d): Comparison with Supervised Upper Bound**  
+> Let $\pi_{\text{supervised}}$ be a model trained directly on test data with ground-truth labels. Show that:
+> $$\lim_{T \to \infty} \text{KL}(\pi_{\theta_T} \| \pi_{\text{supervised}}) = O(\epsilon_{\text{maj}} + \epsilon_{\text{reward}})$$
+> This suggests TTRL can approach supervised performance when majority voting becomes reliable.
+
+> **Problem (e): Failure Conditions**  
+> Identify necessary conditions for TTRL failure:
+> (i) **Prior Knowledge Insufficiency**: Show that if the model's initial accuracy on difficulty level $\ell$ is below threshold $\tau_\ell$, then TTRL improvement decreases as $O(1/\ell)$.  
+> (ii) **Hyperparameter Sensitivity**: Prove that inappropriate temperature $\tau$ or batch size $B$ can lead to divergence when entropy $H(\pi_\theta)$ fails to decrease.
+
+> **Problem (f): Practical Implications**  
+> (i) Explain when the bounds in (a) and (d) become vacuous.  
+> (ii) Interpret how model diversity (measured by prediction entropy) affects convergence.  
+> (iii) Suggest three practical strategies to reduce $\epsilon_{\text{maj}}$ and $\epsilon_{\text{reward}}$.

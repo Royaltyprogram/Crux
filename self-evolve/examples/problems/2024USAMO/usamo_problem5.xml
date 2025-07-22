@@ -1,0 +1,1 @@
+Determine, with proof, all positive integers $k$ such that\[\frac{1}{n+1} \sum_{i=0}^n \binom{n}{i}^k\]is an integer for every positive integer $n.$

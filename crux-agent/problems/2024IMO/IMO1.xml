@@ -1,0 +1,4 @@
+Problem 1. Determine all real numbers α such that, for every positive integer n, the integer
+⌊α⌋ + ⌊2α⌋ + · · · + ⌊nα⌋
+is a multiple of n. (Note that ⌊z⌋ denotes the greatest integer less than or equal to z. For example,
+⌊−π⌋ = −4 and ⌊2⌋ = ⌊2.9⌋ = 2.)

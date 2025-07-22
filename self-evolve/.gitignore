@@ -1,0 +1,9 @@
+myenv/
+.env
+.DS_Store
+
+#python cache
+__pycache__/
+
+logs/
+logs/openai_example.jsonl

@@ -1,0 +1,6 @@
+Problem 3. Let a1, a2, a3, . . . be an infinite sequence of positive integers, and let N be a positive
+integer. Suppose that, for each n > N, an is equal to the number of times an−1 appears in the list
+a1, a2, . . . , an−1.
+Prove that at least one of the sequences a1, a3, a5, . . . and a2, a4, a6, . . . is eventually periodic.
+(An infinite sequence b1, b2, b3, . . . is eventually periodic if there exist positive integers p and M such
+that bm+p = bm for all m ⩾ M.)
