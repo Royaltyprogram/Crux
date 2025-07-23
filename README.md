@@ -207,10 +207,10 @@ pip install -r requirements.txt
 export OPENAI_API_KEY="your-key-here"
 
 # Run basic example
-python examples/example_usage.py
+python -m self-evolve.exampels.example_usage.py
 
 # Run enhanced Professor-Graduate architecture
-python examples/run_professor_graduate.py
+python -m self-evolve.examples.professor_graduate_example
 ```
 
 ### Option 2: Run Full Web Application
