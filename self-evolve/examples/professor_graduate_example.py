@@ -439,7 +439,7 @@ def professor_graduate_example():
     """Example demonstrating Professor + Graduate Self-Evolve system with Responses API"""
     
     # Setup structured JSON logging
-    setup_logging(log_level="INFO", log_file="./tooliense/logs/professor_graduate_responses.jsonl", json_logs=True)
+    setup_logging(log_level="INFO", log_file="./self-evolve/logs/professor_graduate_responses.jsonl", json_logs=True)
     
     # Configure the system for Responses API
     config = FrameworkConfig(
@@ -488,7 +488,7 @@ def professor_graduate_example():
     
     # Load problem from XML file
     try:
-        problem_file = os.getenv("PROBLEM_FILE", "./tooliense/examples/problems/IC-RL.xml")
+        problem_file = os.getenv("PROBLEM_FILE", "./self-evolve/examples/problems/IC-RL.xml")
         with open(problem_file, "r", encoding="utf-8") as f:
             question = f.read()
             question = question + "\n\nsolve this problem with consulting the graduate_specialist and perfect mathematical rigor."
@@ -550,7 +550,7 @@ def professor_graduate_example():
     # Create session directory
     import uuid
     session_id = str(uuid.uuid4())[:8]
-    session_dir = f"./tooliense/examples/results/logs/{session_id}"
+    session_dir = f"./self-evolve/examples/results/logs/{session_id}"
     os.makedirs(session_dir, exist_ok=True)
     
     output_path = os.path.join(session_dir, f"professor_graduate_responses_{timestamp}.json")
