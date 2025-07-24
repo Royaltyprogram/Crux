@@ -4,7 +4,6 @@
 
 <p><em>The State-of-the-Art Intelligence</em></p>
 
-
 <img src="./assets/crux-github-banner.png" alt="Crux AI Banner" width="100%" style="border-radius: 15px; box-shadow: 0 8px 32px rgba(0,0,0,0.1);">
 
 ---
@@ -55,7 +54,7 @@
 
 **Prompt ≙ Policy Parameters | Feedback ≙ Reward**
 
-*We optimize the context itself, not the model weights.*
+_We optimize the context itself, not the model weights._
 
 </div>
 
@@ -64,6 +63,7 @@
 ## 🏆 Key Achievements
 
 ### 🎯 2025 USAMO Problem 6 Complete Solution
+
 - **9,000+ lines** of internal reasoning
 - **1+ hour** of continuous problem-solving
 - **Complete mathematical proof** with rigorous methodology
@@ -71,7 +71,9 @@
 📄 **[View Solution](./2025USAMO/2025_USAMO_p6.pdf)** - The final output showcasing Crux's unique approach to complex mathematical problems.
 
 ### 🔬 Independent TTRL Hypothesis Verification
+
 **Starting from only the hypothesis**, Crux autonomously derived:
+
 - ✅ **9 systematic lemmas** with complete mathematical rigor
 - ✅ **Full convergence proofs** for the theoretical framework
 - ✅ **δ-bookkeeping methodology** for practical implementation
@@ -79,11 +81,12 @@
 - 📄 **[View Research](./arXiv/TTRL-paper.pdf)**
 
 ### 🏗️ Enhanced Multi-Layer Agent Architecture
+
 - **Hierarchical orchestration** inspired by graduate school research structures
 - **Recursive depth capabilities** for arbitrarily complex problems
 - **Dynamic specialist allocation** based on problem complexity
 - **Proven scaling behavior** similar to deep neural networks
-📄 **[View Research](./arXiv/TTRL-paper.pdf)** - Complete independent mathematical derivation and analysis.
+  📄 **[View Research](./arXiv/TTRL-paper.pdf)** - Complete independent mathematical derivation and analysis.
 
 > **Paradigm Shift**: Crux doesn't just reproduce existing work—it conducts **original mathematical discovery** through autonomous reasoning.
 
@@ -120,7 +123,6 @@
 - Systematic lemma development
 - Mathematical framework derivation
 
-  
 ## Technical Specifications
 
 **Problem Solving Capability:**
@@ -142,6 +144,8 @@
 ![Research Analytics](https://img.shields.io/badge/Lines%20of%20Reasoning-9000%2B-brightgreen?style=flat-square)
 ![Problem Difficulty](https://img.shields.io/badge/Problem%20Level-USAMO-red?style=flat-square)
 ![Research Quality](https://img.shields.io/badge/Quality-Peer%20Reviewed-blue?style=flat-square)
+
+![Star History](./assets/star-history-2025724.png)
 
 ## Contributing to Research
 
@@ -168,9 +172,11 @@ We welcome contributions to advancing AI-driven mathematical research! Feel free
 ## 📁 Project Structure
 
 ### [🧠 Self-Evolve Core](./self-evolve/)
+
 The heart of Crux - implementing the IC-RL algorithm with enhanced multi-agent hierarchical architecture.
 
 **Key Features:**
+
 - Basic Self-Evolve mechanism (Generator → Evaluator → Refiner)
 - Enhanced Professor-Specialist architecture
 - Recursive deep agent hierarchies
@@ -179,9 +185,11 @@ The heart of Crux - implementing the IC-RL algorithm with enhanced multi-agent h
 [**→ Read Full Documentation**](./self-evolve/ReadMe.md)
 
 ### [🌐 Crux Agent Web Application](./crux-agent/)
+
 Production-ready FastAPI + Next.js application for experiencing Crux capabilities.
 
 **Key Features:**
+
 - RESTful API with async processing (FastAPI + Celery)
 - Modern React frontend with real-time updates
 - Multi-provider LLM support (OpenAI, OpenRouter, DeepSeek)
@@ -242,11 +250,13 @@ Visit `http://localhost:3000` to access the web interface.
 ## 💡 Technical Innovation
 
 ### IC-RL: A New Paradigm
+
 - Treats **prompts as trainable policy parameters**
 - Uses **natural-language feedback as reward signals**
 - Achieves optimization through **context refinement**, not weight updates
 
 ### Hierarchical Agent Architecture
+
 ```
 🎓 Professor Agent
     ├── 🔬 Math Specialist → [Sub-specialists...]
@@ -257,6 +267,7 @@ Visit `http://localhost:3000` to access the web interface.
 Each specialist can recursively become a professor, creating fractal-like intelligence hierarchies.
 
 ### Proven Scaling Behavior
+
 - **Depth-1**: Single agent for simple tasks
 - **Depth-2**: Professor + 3-4 specialists for complex reasoning
 - **Depth-3+**: Recursive hierarchies for research-grade problems
@@ -265,18 +276,19 @@ Each specialist can recursively become a professor, creating fractal-like intell
 
 ## 📈 Performance Insights
 
-| Metric | Basic Self-Evolve | Enhanced Architecture |
-|--------|------------------|--------------------|
-| **Problem Complexity** | Medium | Ultra-High |
-| **Reasoning Depth** | ~100 lines | 9,000+ lines |
-| **Success Rate** | Good | Exceptional |
-| **Scaling Ability** | Limited | Unlimited |
+| Metric                 | Basic Self-Evolve | Enhanced Architecture |
+| ---------------------- | ----------------- | --------------------- |
+| **Problem Complexity** | Medium            | Ultra-High            |
+| **Reasoning Depth**    | ~100 lines        | 9,000+ lines          |
+| **Success Rate**       | Good              | Exceptional           |
+| **Scaling Ability**    | Limited           | Unlimited             |
 
 ---
 
 ## 🤝 Contributing
 
 We welcome contributions! Areas of interest:
+
 - Automated specialist discovery algorithms
 - Cross-domain transfer learning
 - Resource optimization for dynamic teams
@@ -308,7 +320,7 @@ MIT License. Please respect the terms of your model provider (OpenAI, DeepSeek, 
 
 <div align="center">
 
-### ✨ *"The LLM already knows; we orchestrate the right specialists with the right questions through dynamic intelligence hierarchies."* ✨
+### ✨ _"The LLM already knows; we orchestrate the right specialists with the right questions through dynamic intelligence hierarchies."_ ✨
 
 **Powered by Tooliense Crux Agent Architecture**
 
