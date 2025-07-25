@@ -709,6 +709,13 @@ export OPENAI_API_KEY="your-key-here"
 export DEEPSEEK_API_KEY="your-key-here"
 ```
 
+### Windows Installation
+For Windows users, remove `uvloop` from `requirements.txt` before installation (uvloop is Unix-only):
+```bash
+# Edit requirements.txt and remove the uvloop line, then:
+pip install -r requirements.txt
+```
+
 ### Running Basic Self-Evolve Example
 ```bash
 # Basic iterative improvement with prompt refinement
