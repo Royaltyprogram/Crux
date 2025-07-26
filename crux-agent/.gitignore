@@ -10,7 +10,7 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+lib/**/*.js
 lib64/
 parts/
 sdist/
@@ -69,4 +69,13 @@ celerybeat.pid
 
 # Supabase
 supabase/
-.supabase/ 
+.supabase/
+
+# Reproduction and Investigation Files
+.env.reproduction
+*.backup
+redis_snapshots/
+task_deletion_evidence_*/
+reproduction_logs/
+task_detailed_analysis_*.json
+*_final_report.txt
