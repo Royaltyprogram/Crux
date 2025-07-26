@@ -4,7 +4,7 @@ Solve endpoints for basic and enhanced modes.
 import json
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated
 
 import redis.asyncio as redis
@@ -61,12 +61,13 @@ async def solve_basic(
         job_data = {
             "job_id": job_id,
             "status": JobStatus.PENDING.value,
-            "created_at": datetime.now(datetime.UTC).isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "request": json.dumps(request.model_dump()),
             "mode": "basic",
         }
         await redis_client.hset(f"job:{job_id}", mapping=job_data)
-        await redis_client.expire(f"job:{job_id}", 3600)  # 1 hour TTL
+        # TESTING MODE: Extended TTL to prevent automatic deletion during testing
+        await redis_client.expire(f"job:{job_id}", 86400 * 7)  # 7 days TTL (was 1 hour)
         
         # Submit task to Celery
         celery_app.send_task(
@@ -78,7 +79,7 @@ async def solve_basic(
         return AsyncJobResponse(
             job_id=job_id,
             status=JobStatus.PENDING,
-            created_at=datetime.now(datetime.UTC),
+            created_at=datetime.now(timezone.utc),
             message="Job submitted successfully",
         )
     
@@ -149,12 +150,13 @@ async def solve_enhanced(
         job_data = {
             "job_id": job_id,
             "status": JobStatus.PENDING.value,
-            "created_at": datetime.now(datetime.UTC).isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "request": json.dumps(request.model_dump()),
             "mode": "enhanced",
         }
         await redis_client.hset(f"job:{job_id}", mapping=job_data)
-        await redis_client.expire(f"job:{job_id}", 3600)  # 1 hour TTL
+        # TESTING MODE: Extended TTL to prevent automatic deletion during testing
+        await redis_client.expire(f"job:{job_id}", 86400 * 7)  # 7 days TTL (was 1 hour)
         
         # Submit task to Celery
         celery_app.send_task(
@@ -166,7 +168,7 @@ async def solve_enhanced(
         return AsyncJobResponse(
             job_id=job_id,
             status=JobStatus.PENDING,
-            created_at=datetime.now(datetime.UTC),
+            created_at=datetime.now(timezone.utc),
             message="Job submitted successfully",
         )
     
