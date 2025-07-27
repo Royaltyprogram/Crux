@@ -176,6 +176,9 @@ export const apiClient = new ApiClient();
 export const continueTask = (jobId: string, additionalIterations: number = 1) => 
   apiClient.continueTask(jobId, additionalIterations);
 
+// Also export as named export for better compatibility  
+export { continueTask as continueTaskAPI };
+
 // Utility functions
 /**
  * Format duration from seconds to human readable format

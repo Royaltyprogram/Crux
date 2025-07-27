@@ -212,11 +212,11 @@ async def solve_enhanced(
 @router.post("/continue/{job_id}", response_model=SolutionResponse | AsyncJobResponse)
 async def continue_task(
     job_id: str,
-    additional_iterations: int = 1,
     provider: Annotated[BaseProvider, Depends(get_provider)],
     redis_client: Annotated[redis.Redis, Depends(get_redis)],
     celery_app: Annotated[Celery, Depends(get_celery)],
     request_id: Annotated[str, Depends(get_request_id)],
+    additional_iterations: int = 1,
 ) -> SolutionResponse | AsyncJobResponse:
     """
     Continue a completed task with additional iterations.
@@ -240,6 +240,9 @@ async def continue_task(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Job {job_id} not found",
         )
+    
+    # Decode bytes to strings
+    job_data = {k.decode(): v.decode() for k, v in job_data.items()}
     
     # Check if job is completed
     if job_data.get("status") != JobStatus.COMPLETED.value:

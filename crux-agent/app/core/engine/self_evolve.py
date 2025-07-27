@@ -146,7 +146,8 @@ class SelfEvolve:
         current_output = evolution_history[-1]["output"] if evolution_history else ""
         should_stop = False
 
-        for iteration in range(start_iteration, self.max_iters + 1):
+        iteration = start_iteration
+        while iteration <= self.max_iters:
             # Check for cancellation
             if self._cancelled:
                 logger.info(f"Self-Evolve cancelled at iteration {iteration}")
@@ -158,7 +159,7 @@ class SelfEvolve:
             if self.progress_callback:
                 self.progress_callback(iteration, self.max_iters, f"Self-Evolve iteration {iteration}/{self.max_iters}")
 
-            # Step 1: Generate answer
+            # Step 1: Generate answer with validation
             gen_context = AgentContext(
                 prompt=prompt,
                 additional_context={
@@ -166,8 +167,49 @@ class SelfEvolve:
                     "context": problem.context,
                 },
             )
-            gen_result = await self.generator.run(gen_context)
-            output = gen_result.output
+            
+            # Try generation with retries for invalid outputs
+            gen_result = None
+            output = None
+            retry_count = 0
+            max_retries_per_iteration = 2
+            
+            while retry_count <= max_retries_per_iteration:
+                try:
+                    gen_result = await self.generator.run(gen_context)
+                    output = gen_result.output
+                    
+                    # Validate the generated output
+                    if self._is_valid_output(output):
+                        break  # Valid output, proceed
+                    else:
+                        logger.warning(f"Invalid output detected in iteration {iteration}, retry {retry_count + 1}")
+                        if retry_count < max_retries_per_iteration:
+                            retry_count += 1
+                            continue
+                        else:
+                            logger.error(f"Max retries reached for iteration {iteration}, proceeding with invalid output")
+                            break
+                            
+                except Exception as e:
+                    logger.error(f"Generation failed in iteration {iteration}, retry {retry_count + 1}: {e}")
+                    if retry_count < max_retries_per_iteration:
+                        retry_count += 1
+                        continue
+                    else:
+                        # Create a fallback result
+                        gen_result = type('GenResult', (), {
+                            'output': f"Generation failed after {max_retries_per_iteration + 1} attempts: {str(e)}",
+                            'metadata': {'error': str(e), 'fallback': True},
+                            'tokens_used': 0
+                        })()
+                        output = gen_result.output
+                        break
+            
+            # If still invalid output and retries exceeded, skip this iteration without incrementing
+            if not self._is_valid_output(output) and retry_count > max_retries_per_iteration:
+                logger.error(f"Skipping iteration {iteration} due to persistent invalid output")
+                continue  # Skip to next iteration attempt without incrementing
 
             # Extract reasoning summary from generator
             generator_reasoning_summary = gen_result.metadata.get("reasoning_summary", "")
@@ -270,29 +312,36 @@ class SelfEvolve:
                         raise asyncio.CancelledError("Self-Evolve was cancelled")
                 else:
                     logger.info("Skipping refinement due to skipped evaluation.")
+            
+            # Increment iteration counter only after successful completion
+            iteration += 1
 
         # Final cancellation check
         if self._cancelled:
             logger.info("Self-Evolve cancelled before creating final solution")
             raise asyncio.CancelledError("Self-Evolve was cancelled")
 
+        # Calculate actual completed iterations from evolution history
+        completed_iterations = len(evolution_history)
+        final_iteration = iteration - 1  # iteration is incremented after completion
+        
         # Create final solution
         solution = Solution(
             output=current_output,
-            iterations=iteration,
+            iterations=completed_iterations,
             evolution_history=evolution_history,
             total_tokens=total_tokens,
             metadata={
                 "problem": problem.dict(),
                 "converged": should_stop,
-                "final_iteration": iteration,
+                "final_iteration": final_iteration,
                 "stop_reason": "evaluator_stop" if should_stop else "max_iterations",
             },
         )
 
         logger.info(
             f"Self-Evolve complete. Converged: {should_stop}, "
-            f"Iterations: {iteration}, Tokens: {total_tokens}"
+            f"Iterations: {completed_iterations}, Tokens: {total_tokens}"
         )
 
         return solution
@@ -316,6 +365,52 @@ class SelfEvolve:
             prompt_parts.append(f"\nConstraints: {problem.constraints}")
         
         return "\n".join(prompt_parts)
+    
+    def _is_valid_output(self, output: str) -> bool:
+        """
+        Validate if an output is worth counting as a real iteration.
+        
+        Args:
+            output: Generated output to validate
+            
+        Returns:
+            True if output is valid, False otherwise
+        """
+        if not output:
+            return False
+            
+        output_stripped = output.strip()
+        
+        # Check for completely empty output
+        if not output_stripped:
+            return False
+            
+        # Check for placeholder outputs
+        if output_stripped in ["...", "…", "[content continues]", "[generating...]"]:
+            return False
+            
+        # Check for error messages
+        error_patterns = [
+            "i apologize, but i encountered an error",
+            "i'm sorry, but an error occurred",
+            "unable to generate",
+            "generation failed",
+            "error generating",
+            "cannot process",
+            "failed to process",
+        ]
+        
+        output_lower = output_stripped.lower()
+        for pattern in error_patterns:
+            if pattern in output_lower:
+                return False
+                
+        # Check for outputs that are too short to be meaningful (less than 10 words)
+        word_count = len(output_stripped.split())
+        if word_count < 10:
+            return False
+            
+        return True
     
     def get_config(self) -> Dict[str, Any]:
         """Get engine configuration."""

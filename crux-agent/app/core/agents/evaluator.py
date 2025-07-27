@@ -82,7 +82,7 @@ class EvaluatorAgent(AbstractAgent):
         Returns:
             Evaluation result with score and feedback
         """
-        if not context.output:
+        if not context.output or context.output.strip() == "":
             logger.error("No output provided for evaluation")
             return AgentResult(
                 output="Cannot evaluate: no answer provided",
@@ -110,13 +110,27 @@ class EvaluatorAgent(AbstractAgent):
                 prompt=evaluation_prompt,
                 functions=[],  # No custom functions – enables built-in code interpreter
                 temperature=self.temperature,
-            )
-            
+            ).strip()
+
+            # Prevent invalid empty evaluations from wrongly triggering stoppage
+            if not evaluation or evaluation == "Cannot evaluate: no answer provided":
+                logger.error("Invalid evaluation: empty or placeholder response")
+                return AgentResult(
+                    output="Evaluation failed",
+                    score=None,  # No score - only feedback
+                    feedback="Invalid evaluation: empty or placeholder response",
+                    metadata={
+                        "should_stop": False,
+                    },
+                    tokens_used=0,
+                )
+
             # Count tokens for cost tracking
             tokens_used = self.provider.count_tokens(evaluation_prompt + evaluation)
             
             # Check for <stop> token to determine if iteration should stop
-            should_stop = "<stop>" in evaluation
+            # Be more conservative - don't stop if there are errors mentioned
+            should_stop = "<stop>" in evaluation and "error" not in evaluation.lower()
             
             logger.info(f"Evaluation complete. Should stop: {should_stop}, tokens: {tokens_used}")
             

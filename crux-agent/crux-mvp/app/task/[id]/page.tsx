@@ -18,7 +18,7 @@ import {
 } from "@/components/ui/accordion";
 import { Progress } from "@/components/ui/progress";
 import { useTasks, type Task } from "@/hooks/use-tasks";
-import { formatDuration, formatTokens, continueTask } from "@/lib/api";
+import { formatDuration, formatTokens, apiClient } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import remarkMath from "remark-math";
@@ -234,7 +234,25 @@ export default function TaskDetailPage() {
     
     setContinuing(true);
     try {
-      const response = await continueTask(task.id, 1); // Add 1 more iteration
+      const response = await apiClient.continueTask(task.id, 1); // Add 1 more iteration
+      
+      // Add the new continuation task to the task list
+      const newTask = {
+        id: response.job_id,
+        topic: `${task.topic} (Continued +1)`,
+        mode: task.mode,
+        status: "pending" as const,
+        createdAt: response.created_at,
+        progress: 0,
+        currentPhase: "Initializing",
+      };
+      
+      // Get the current tasks from localStorage and add the new one
+      const storedTasks = localStorage.getItem("crux-tasks");
+      const currentTasks = storedTasks ? JSON.parse(storedTasks) : [];
+      const updatedTasks = [newTask, ...currentTasks];
+      localStorage.setItem("crux-tasks", JSON.stringify(updatedTasks));
+      
       toast.success("Task continuation started successfully!");
       await refreshTasks();
       router.push(`/task/${response.job_id}`);
