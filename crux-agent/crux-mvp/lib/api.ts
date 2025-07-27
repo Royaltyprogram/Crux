@@ -161,10 +161,20 @@ class ApiClient {
       method: 'DELETE',
     });
   }
+
+  async continueTask(jobId: string, additionalIterations: number = 1): Promise<AsyncJobResponse> {
+    return this.request<AsyncJobResponse>(`/solve/continue/${jobId}?additional_iterations=${additionalIterations}`, {
+      method: 'POST',
+    });
+  }
 }
 
 // Export singleton instance
 export const apiClient = new ApiClient();
+
+// Export specific API methods for convenience
+export const continueTask = (jobId: string, additionalIterations: number = 1) => 
+  apiClient.continueTask(jobId, additionalIterations);
 
 // Utility functions
 /**

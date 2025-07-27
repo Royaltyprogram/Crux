@@ -86,37 +86,85 @@ class SelfEvolve:
         Raises:
             asyncio.CancelledError: If cancellation was requested
         """
-        logger.info(f"Starting Self-Evolve for: {problem.question[:100]}...")
+        return await self._solve_internal(problem, start_iteration=1, evolution_history=[])
+
+    async def resume_solve(self, problem: Problem, evolution_history: list, start_iteration: int) -> Solution:
+        """
+        Resume solving a problem from a previous state.
         
+        Args:
+            problem: Problem to solve
+            evolution_history: Previous evolution history
+            start_iteration: Iteration to start from
+            
+        Returns:
+            Solution with final answer and metadata
+            
+        Raises:
+            asyncio.CancelledError: If cancellation was requested
+        """
+        return await self._solve_internal(problem, start_iteration, evolution_history)
+
+    async def _solve_internal(self, problem: Problem, start_iteration: int = 1, evolution_history: list = None) -> Solution:
+        """
+        Internal method to solve a problem using the Self-Evolve algorithm with an option to resume.
+        
+        Args:
+            problem: Problem to solve
+            start_iteration: Iteration to start from
+            evolution_history: Existing evolution history
+            
+        Returns:
+            Solution with final answer and metadata
+            
+        Raises:
+            asyncio.CancelledError: If cancellation was requested
+        """
+        if evolution_history is None:
+            evolution_history = []
+            
+        logger.info(f"Starting Self-Evolve from iteration {start_iteration} for: {problem.question[:100]}...")
+
         # Reset cancellation flag
         self._cancelled = False
-        
+
         # Initialize tracking variables
-        prompt = self._create_initial_prompt(problem)
-        evolution_history = []
+        if evolution_history and "refined_prompt" in evolution_history[-1]:
+            prompt = evolution_history[-1]["refined_prompt"]
+        else:
+            prompt = self._create_initial_prompt(problem)
+            
+        # Calculate tokens from previous iterations
         total_tokens = 0
-        current_output = ""
+        for item in evolution_history:
+            if "metadata" in item:
+                gen_tokens = item["metadata"].get("generator", {}).get("tokens_used", 0)
+                eval_tokens = item["metadata"].get("evaluator", {}).get("tokens_used", 0)
+                refiner_tokens = item["metadata"].get("refiner", {}).get("tokens_used", 0)
+                total_tokens += gen_tokens + eval_tokens + refiner_tokens
+                
+        current_output = evolution_history[-1]["output"] if evolution_history else ""
         should_stop = False
-        
-        for iteration in range(1, self.max_iters + 1):
+
+        for iteration in range(start_iteration, self.max_iters + 1):
             # Check for cancellation
             if self._cancelled:
                 logger.info(f"Self-Evolve cancelled at iteration {iteration}")
                 raise asyncio.CancelledError("Self-Evolve was cancelled")
-            
+
             logger.info(f"Self-Evolve iteration {iteration}/{self.max_iters}")
-            
+
             # Update progress if callback provided
             if self.progress_callback:
                 self.progress_callback(iteration, self.max_iters, f"Self-Evolve iteration {iteration}/{self.max_iters}")
-            
+
             # Step 1: Generate answer
             gen_context = AgentContext(
                 prompt=prompt,
                 additional_context={
                     "constraints": problem.constraints,
                     "context": problem.context,
-                }
+                },
             )
             gen_result = await self.generator.run(gen_context)
             output = gen_result.output
@@ -124,16 +172,16 @@ class SelfEvolve:
             # Extract reasoning summary from generator
             generator_reasoning_summary = gen_result.metadata.get("reasoning_summary", "")
             current_output = output
-            
+
             # Track tokens
             if gen_result.tokens_used:
                 total_tokens += gen_result.tokens_used
-            
+
             # Check for cancellation after generation
             if self._cancelled:
                 logger.info(f"Self-Evolve cancelled after generation in iteration {iteration}")
                 raise asyncio.CancelledError("Self-Evolve was cancelled")
-            
+
             # Step 2: Evaluate answer
             # For professor, skip evaluation in the final iteration
             eval_result = None
@@ -149,7 +197,7 @@ class SelfEvolve:
                         "constraints": problem.constraints,
                         "context": problem.context,
                         "generator_reasoning_summary": generator_reasoning_summary,
-                    }
+                    },
                 )
                 eval_result = await self.evaluator.run(eval_context)
 
@@ -162,7 +210,7 @@ class SelfEvolve:
 
                 # Check for <stop> token
                 should_stop = eval_result.metadata.get("should_stop", False)
-                
+
                 # Check for cancellation after evaluation
                 if self._cancelled:
                     logger.info(f"Self-Evolve cancelled after evaluation in iteration {iteration}")
@@ -183,12 +231,12 @@ class SelfEvolve:
             evolution_history.append(iteration_data)
 
             logger.info(f"Iteration {iteration} complete. Should stop: {should_stop}")
-            
+
             # Check exit conditions
             if should_stop:
                 logger.info("Evaluator issued <stop> token. Solution is complete.")
                 break
-            
+
             # Step 3: Refine prompt for next iteration (if not last iteration)
             if iteration < self.max_iters:
                 # Ensure we have an evaluation result before refining
@@ -215,19 +263,19 @@ class SelfEvolve:
                     # Add refinement data to iteration
                     iteration_data["refined_prompt"] = prompt
                     iteration_data["metadata"]["refiner"] = refine_result.metadata
-                    
+
                     # Check for cancellation after refinement
                     if self._cancelled:
                         logger.info(f"Self-Evolve cancelled after refinement in iteration {iteration}")
                         raise asyncio.CancelledError("Self-Evolve was cancelled")
                 else:
                     logger.info("Skipping refinement due to skipped evaluation.")
-        
+
         # Final cancellation check
         if self._cancelled:
             logger.info("Self-Evolve cancelled before creating final solution")
             raise asyncio.CancelledError("Self-Evolve was cancelled")
-        
+
         # Create final solution
         solution = Solution(
             output=current_output,
@@ -241,12 +289,12 @@ class SelfEvolve:
                 "stop_reason": "evaluator_stop" if should_stop else "max_iterations",
             },
         )
-        
+
         logger.info(
             f"Self-Evolve complete. Converged: {should_stop}, "
             f"Iterations: {iteration}, Tokens: {total_tokens}"
         )
-        
+
         return solution
 
     def _create_initial_prompt(self, problem: Problem) -> str:
@@ -276,4 +324,4 @@ class SelfEvolve:
             "generator": self.generator.role,
             "evaluator": self.evaluator.role,
             "refiner": self.refiner.role,
-        } 
+        }

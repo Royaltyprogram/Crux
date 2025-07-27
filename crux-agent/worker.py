@@ -278,6 +278,130 @@ async def _solve_enhanced_async(job_id: str, request_data: dict, task):
     }
 
 
+async def _continue_basic_async(job_id: str, original_request_data: dict, evolution_history: list, additional_iterations: int, task):
+    """
+    Async implementation of continue basic solve.
+    
+    Args:
+        job_id: Job ID
+        original_request_data: Original request data
+        evolution_history: Previous evolution history
+        additional_iterations: Number of additional iterations to run
+        task: Celery task instance for progress updates
+        
+    Returns:
+        Solution response data
+    """
+    start_time = time.time()
+    
+    # Create provider
+    provider = create_provider()
+    
+    # Create runner
+    runner = BasicRunner(
+        provider=provider,
+        max_iters=original_request_data.get("n_iters") or settings.max_iters,  # This will be overridden in resume_solve
+    )
+    
+    # Setup progress tracking
+    redis_client = get_redis_sync()
+    
+    def update_progress(progress: float, phase: str = ""):
+        """Update progress in Redis and Celery."""
+        task.update_state(
+            state="PROGRESS",
+            meta={"progress": progress, "phase": phase},
+        )
+        redis_client.hset(f"job:{job_id}", "progress", progress)
+        if phase:
+            redis_client.hset(f"job:{job_id}", "current_phase", phase)
+    
+    # Resume solve with additional iterations
+    solution = await runner.resume_solve(
+        question=original_request_data["question"],
+        evolution_history=evolution_history,
+        additional_iterations=additional_iterations,
+        context=original_request_data.get("context"),
+        constraints=original_request_data.get("constraints"),
+        metadata={"job_id": job_id, "continued_from_iterations": len(evolution_history)},
+        progress_callback=update_progress,
+    )
+    
+    processing_time = time.time() - start_time
+    
+    # Prepare metadata with evolution_history included
+    metadata = solution.metadata.copy()
+    metadata["evolution_history"] = solution.evolution_history
+    
+    # Return solution data
+    return {
+        "output": solution.output,
+        "iterations": solution.iterations,
+        "total_tokens": solution.total_tokens,
+        "processing_time": processing_time,
+        "converged": solution.metadata.get("converged", False),
+        "stop_reason": solution.metadata.get("stop_reason", "unknown"),
+        "metadata": metadata,
+    }
+
+
+@app.task(name="app.worker.continue_basic_task", bind=True)
+def continue_basic_task(self, job_id: str, original_request_data: dict, evolution_history: list, additional_iterations: int):
+    """
+    Celery task for continuing basic mode solving with additional iterations.
+    
+    Args:
+        job_id: New job ID for the continuation
+        original_request_data: Original request data dictionary
+        evolution_history: Previous evolution history
+        additional_iterations: Number of additional iterations to run
+    """
+    logger.info(f"Starting continue basic solve task: {job_id} (+{additional_iterations} iterations)")
+    redis_client = get_redis_sync()
+    
+    try:
+        # Update job status to running
+        redis_client.hset(
+            f"job:{job_id}",
+            mapping={
+                "status": JobStatus.RUNNING.value,
+                "started_at": datetime.utcnow().isoformat(),
+            },
+        )
+        
+        # Run async solve in sync context
+        result = asyncio.run(_continue_basic_async(job_id, original_request_data, evolution_history, additional_iterations, self))
+        
+        # Store result
+        redis_client.hset(
+            f"job:{job_id}",
+            mapping={
+                "status": JobStatus.COMPLETED.value,
+                "completed_at": datetime.utcnow().isoformat(),
+                "result": json.dumps(result),
+                "progress": 1.0,
+            },
+        )
+        
+        logger.info(f"Continue basic solve task completed: {job_id}")
+        return result
+        
+    except Exception as e:
+        logger.error(f"Continue basic solve task failed: {job_id} - {e}")
+        
+        # Update job status to failed
+        redis_client.hset(
+            f"job:{job_id}",
+            mapping={
+                "status": JobStatus.FAILED.value,
+                "completed_at": datetime.utcnow().isoformat(),
+                "error": str(e),
+            },
+        )
+        
+        raise
+
+
 # Health check task
 @app.task(name="app.worker.health_check")
 def health_check():

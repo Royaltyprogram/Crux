@@ -207,3 +207,108 @@ async def solve_enhanced(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Solve failed: {str(e)}",
         )
+
+
+@router.post("/continue/{job_id}", response_model=SolutionResponse | AsyncJobResponse)
+async def continue_task(
+    job_id: str,
+    additional_iterations: int = 1,
+    provider: Annotated[BaseProvider, Depends(get_provider)],
+    redis_client: Annotated[redis.Redis, Depends(get_redis)],
+    celery_app: Annotated[Celery, Depends(get_celery)],
+    request_id: Annotated[str, Depends(get_request_id)],
+) -> SolutionResponse | AsyncJobResponse:
+    """
+    Continue a completed task with additional iterations.
+    
+    This endpoint allows extending a task that reached max iterations
+    but hasn't converged by adding more iterations.
+    
+    Args:
+        job_id: The job ID to continue
+        additional_iterations: Number of additional iterations to run (default: 1)
+    
+    Returns:
+        New solution with extended iterations or async job response
+    """
+    logger.info(f"Continue task request: {job_id} (+{additional_iterations} iterations) [request_id={request_id}]")
+    
+    # Check if job exists
+    job_data = await redis_client.hgetall(f"job:{job_id}")
+    if not job_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Job {job_id} not found",
+        )
+    
+    # Check if job is completed
+    if job_data.get("status") != JobStatus.COMPLETED.value:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Job {job_id} is not completed. Current status: {job_data.get('status')}",
+        )
+    
+    # Parse the result to get evolution history
+    try:
+        result = json.loads(job_data.get("result", "{}"))
+        evolution_history = result.get("metadata", {}).get("evolution_history", [])
+        
+        if not evolution_history:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Job has no evolution history to continue from",
+            )
+        
+        # Check if task already converged
+        if result.get("converged", False):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Task already converged. Cannot continue a converged task.",
+            )
+        
+        # Parse original request
+        original_request = json.loads(job_data.get("request", "{}"))
+        mode = job_data.get("mode", "basic")
+        
+    except (json.JSONDecodeError, KeyError) as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid job data: {str(e)}",
+        )
+    
+    # Create new job ID for the continuation
+    new_job_id = str(uuid.uuid4())
+    
+    # Store initial job info in Redis
+    continuation_job_data = {
+        "job_id": new_job_id,
+        "status": JobStatus.PENDING.value,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "request": json.dumps(original_request),
+        "mode": mode,
+        "continued_from": job_id,
+        "additional_iterations": additional_iterations,
+    }
+    await redis_client.hset(f"job:{new_job_id}", mapping=continuation_job_data)
+    await redis_client.expire(f"job:{new_job_id}", 86400 * 7)  # 7 days TTL
+    
+    # Submit continuation task to Celery
+    if mode == "basic":
+        celery_app.send_task(
+            "app.worker.continue_basic_task",
+            args=[new_job_id, original_request, evolution_history, additional_iterations],
+            task_id=new_job_id,
+        )
+    else:
+        # For now, only support basic mode continuation
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Task continuation is currently only supported for basic mode",
+        )
+    
+    return AsyncJobResponse(
+        job_id=new_job_id,
+        status=JobStatus.PENDING,
+        created_at=datetime.now(timezone.utc),
+        message=f"Task continuation submitted successfully (+{additional_iterations} iterations)",
+    )
