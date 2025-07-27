@@ -8,6 +8,8 @@ export interface BasicSolveRequest {
   context?: string;
   constraints?: string;
   n_iters?: number;
+  llm_provider?: string;
+  model_name?: string;
   async_mode?: boolean;
 }
 
@@ -16,6 +18,8 @@ export interface EnhancedSolveRequest {
   context?: string;
   specialist_max_iters?: number;
   professor_max_iters?: number;
+  llm_provider?: string;
+  model_name?: string;
   async_mode?: boolean;
 }
 
@@ -44,6 +48,7 @@ export interface JobResponse {
   completed_at?: string;
   progress: number;
   current_phase: string;
+  model_name?: string;
   result?: TaskResult;
   error?: string;
   partial_results?: any;
@@ -53,6 +58,17 @@ export interface GetJobOptions {
   include_partial_results?: boolean;
   include_evolution_history?: boolean;
   include_specialist_details?: boolean;
+}
+
+export interface SettingsResponse {
+  llm_provider: string;
+  model_name: string;
+  max_iters: number;
+  specialist_max_iters: number;
+  professor_max_iters: number;
+  available_providers: string[];
+  openai_models: string[];
+  openrouter_models: string[];
 }
 
 // API Configuration
@@ -166,6 +182,10 @@ class ApiClient {
     return this.request<AsyncJobResponse>(`/solve/continue/${jobId}?additional_iterations=${additionalIterations}`, {
       method: 'POST',
     });
+  }
+
+  async getSettings(): Promise<SettingsResponse> {
+    return this.request<SettingsResponse>('/settings');
   }
 }
 

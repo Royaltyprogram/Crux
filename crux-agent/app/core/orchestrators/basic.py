@@ -27,6 +27,7 @@ class BasicRunner:
         provider: BaseProvider,
         generator_agent: Optional[AbstractAgent] = None,
         max_iters: int = None,  # Will use settings.max_iters if None
+        service_tier: Optional[str] = None,  # OpenAI service tier (e.g., "flex")
     ):
         """
         Initialize BasicRunner.
@@ -48,11 +49,11 @@ class BasicRunner:
             self.generator = generator_agent
         else:
             # Create a general-purpose generator
-            self.generator = GeneratorAgent(provider=provider)
+            self.generator = GeneratorAgent(provider=provider, service_tier=service_tier)
         
         # Create evaluator and refiner
-        self.evaluator = EvaluatorAgent(provider=provider)
-        self.refiner = RefinerAgent(provider=provider)
+        self.evaluator = EvaluatorAgent(provider=provider, service_tier=service_tier)
+        self.refiner = RefinerAgent(provider=provider, service_tier=service_tier)
         
         # Create Self-Evolve engine
         self.engine = SelfEvolve(

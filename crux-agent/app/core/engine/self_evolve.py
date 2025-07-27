@@ -134,6 +134,11 @@ class SelfEvolve:
         else:
             prompt = self._create_initial_prompt(problem)
             
+        # Initialize additional tracking variables
+        best_iteration = None        # Dict from evolution_history
+        best_output = ""
+        fallback_triggered = False
+
         # Calculate tokens from previous iterations
         total_tokens = 0
         for item in evolution_history:
@@ -172,7 +177,8 @@ class SelfEvolve:
             gen_result = None
             output = None
             retry_count = 0
-            max_retries_per_iteration = 2
+            max_retries_per_iteration = 4  # Increase retries from 2 to 4
+            generation_successful = False
             
             while retry_count <= max_retries_per_iteration:
                 try:
@@ -181,23 +187,25 @@ class SelfEvolve:
                     
                     # Validate the generated output
                     if self._is_valid_output(output):
+                        generation_successful = True
                         break  # Valid output, proceed
                     else:
-                        logger.warning(f"Invalid output detected in iteration {iteration}, retry {retry_count + 1}")
-                        if retry_count < max_retries_per_iteration:
-                            retry_count += 1
+                        logger.warning(f"Invalid output detected in iteration {iteration}, retry {retry_count + 1}: {repr(output[:100])}")
+                        retry_count += 1
+                        if retry_count <= max_retries_per_iteration:
                             continue
                         else:
-                            logger.error(f"Max retries reached for iteration {iteration}, proceeding with invalid output")
+                            # TODO: New control-flow injection point - consider alternative handling when max retries are reached
+                            logger.error(f"Max retries reached for iteration {iteration} with invalid output")
                             break
                             
                 except Exception as e:
                     logger.error(f"Generation failed in iteration {iteration}, retry {retry_count + 1}: {e}")
-                    if retry_count < max_retries_per_iteration:
-                        retry_count += 1
+                    retry_count += 1
+                    if retry_count <= max_retries_per_iteration:
                         continue
                     else:
-                        # Create a fallback result
+                        # Create a fallback result with error message
                         gen_result = type('GenResult', (), {
                             'output': f"Generation failed after {max_retries_per_iteration + 1} attempts: {str(e)}",
                             'metadata': {'error': str(e), 'fallback': True},
@@ -206,10 +214,14 @@ class SelfEvolve:
                         output = gen_result.output
                         break
             
-            # If still invalid output and retries exceeded, skip this iteration without incrementing
-            if not self._is_valid_output(output) and retry_count > max_retries_per_iteration:
-                logger.error(f"Skipping iteration {iteration} due to persistent invalid output")
-                continue  # Skip to next iteration attempt without incrementing
+            # If we never got a valid output, skip this iteration entirely
+            if not generation_successful:
+                logger.error(f"Skipping iteration {iteration} due to persistent invalid output after {max_retries_per_iteration + 1} attempts")
+                if best_iteration is not None:
+                    fallback_triggered = True
+                    break  # Exit the main while loop
+                else:
+                    raise Exception("No valid iteration found; marking task as failed.")
 
             # Extract reasoning summary from generator
             generator_reasoning_summary = gen_result.metadata.get("reasoning_summary", "")
@@ -225,23 +237,33 @@ class SelfEvolve:
                 raise asyncio.CancelledError("Self-Evolve was cancelled")
 
             # Step 2: Evaluate answer
-            # For professor, skip evaluation in the final iteration
+            # For professor, skip evaluation in the final iteration (but only if we've had multiple iterations)
             eval_result = None
             should_stop = False
-            if self.generator.role == "professor" and iteration == self.max_iters:
+            if self.generator.role == "professor" and iteration == self.max_iters and iteration > 1:
                 logger.info("Skipping final evaluation for professor.")
                 should_stop = True
             else:
-                eval_context = AgentContext(
-                    prompt=problem.question,  # Original question for evaluation
-                    output=output,
-                    additional_context={
-                        "constraints": problem.constraints,
-                        "context": problem.context,
-                        "generator_reasoning_summary": generator_reasoning_summary,
-                    },
-                )
-                eval_result = await self.evaluator.run(eval_context)
+                # Double-check output validity before evaluation (defense in depth)
+                if not self._is_valid_output(output):
+                    logger.warning(f"Skipping evaluation for invalid output in iteration {iteration}")
+                    # Create a mock evaluation result that won't trigger stop
+                    eval_result = type('EvalResult', (), {
+                        'feedback': 'Evaluation skipped due to invalid generator output',
+                        'metadata': {'should_stop': False, 'status': 'skipped_invalid_output'},
+                        'tokens_used': 0
+                    })()
+                else:
+                    eval_context = AgentContext(
+                        prompt=problem.question,  # Original question for evaluation
+                        output=output,
+                        additional_context={
+                            "constraints": problem.constraints,
+                            "context": problem.context,
+                            "generator_reasoning_summary": generator_reasoning_summary,
+                        },
+                    )
+                    eval_result = await self.evaluator.run(eval_context)
 
                 # Extract evaluator reasoning summary
                 evaluator_reasoning_summary = eval_result.metadata.get("reasoning_summary", "")
@@ -271,6 +293,11 @@ class SelfEvolve:
                 },
             }
             evolution_history.append(iteration_data)
+
+            # Update additional tracking variables after successful generation
+            best_iteration = iteration_data
+            best_output = output
+            fallback_triggered = 'fallback' in gen_result.metadata
 
             logger.info(f"Iteration {iteration} complete. Should stop: {should_stop}")
 
@@ -325,9 +352,17 @@ class SelfEvolve:
         completed_iterations = len(evolution_history)
         final_iteration = iteration - 1  # iteration is incremented after completion
         
+        # Determine final iteration and stop reason based on fallback status
+        if fallback_triggered:
+            final_iter = best_iteration
+            stop_reason = "fallback_to_best"
+        else:
+            final_iter = evolution_history[-1]
+            stop_reason = "evaluator_stop" if should_stop else "max_iterations"
+        
         # Create final solution
         solution = Solution(
-            output=current_output,
+            output=final_iter["output"],
             iterations=completed_iterations,
             evolution_history=evolution_history,
             total_tokens=total_tokens,
@@ -335,9 +370,13 @@ class SelfEvolve:
                 "problem": problem.dict(),
                 "converged": should_stop,
                 "final_iteration": final_iteration,
-                "stop_reason": "evaluator_stop" if should_stop else "max_iterations",
+                "stop_reason": stop_reason,
             },
         )
+        
+        # Add fallback metadata
+        solution.metadata["stop_reason"] = stop_reason
+        solution.metadata["fallback_used"] = fallback_triggered
 
         logger.info(
             f"Self-Evolve complete. Converged: {should_stop}, "

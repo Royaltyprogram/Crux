@@ -137,6 +137,7 @@ class JobStatusResponse(BaseModel):
     completed_at: Optional[datetime] = Field(None, description="Job completion timestamp")
     progress: Optional[float] = Field(None, ge=0.0, le=1.0, description="Progress percentage")
     current_phase: Optional[str] = Field(None, description="Current processing phase")
+    model_name: Optional[str] = Field(None, description="Model name used for this job")
     result: Optional[SolutionResponse] = Field(None, description="Final result if completed")
     error: Optional[str] = Field(None, description="Error message if failed")
     partial_results: Optional[List[Dict[str, Any]]] = Field(None, description="Partial results if available")

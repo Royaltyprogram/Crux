@@ -169,13 +169,20 @@ async def _solve_basic_async(job_id: str, request_data: dict, task):
     """
     start_time = time.time()
     
-    # Create provider
-    provider = create_provider()
+    # Create provider using request settings or defaults
+    provider = create_provider(
+        provider_name=request_data.get("llm_provider"),
+        model=request_data.get("model_name"),
+    )
+    
+    # Determine service tier for OpenAI flex pricing
+    service_tier = "flex" if request_data.get("use_flex_tier", False) else None
     
     # Create runner
     runner = BasicRunner(
         provider=provider,
         max_iters=request_data.get("n_iters") or settings.max_iters,
+        service_tier=service_tier,
     )
     
     # Setup progress tracking
@@ -243,8 +250,11 @@ async def _solve_enhanced_async(job_id: str, request_data: dict, task):
         if phase:
             redis_client.hset(f"job:{job_id}", "current_phase", phase)
     
-    # Create provider
-    provider = create_provider()
+    # Create provider using request settings or defaults
+    provider = create_provider(
+        provider_name=request_data.get("llm_provider"),
+        model=request_data.get("model_name"),
+    )
     
     # Create runner
     runner = EnhancedRunner(
@@ -294,13 +304,20 @@ async def _continue_basic_async(job_id: str, original_request_data: dict, evolut
     """
     start_time = time.time()
     
-    # Create provider
-    provider = create_provider()
+    # Create provider using original request settings or defaults
+    provider = create_provider(
+        provider_name=original_request_data.get("llm_provider"),
+        model=original_request_data.get("model_name"),
+    )
+    
+    # Determine service tier for OpenAI flex pricing
+    service_tier = "flex" if original_request_data.get("use_flex_tier", False) else None
     
     # Create runner
     runner = BasicRunner(
         provider=provider,
         max_iters=original_request_data.get("n_iters") or settings.max_iters,  # This will be overridden in resume_solve
+        service_tier=service_tier,
     )
     
     # Setup progress tracking

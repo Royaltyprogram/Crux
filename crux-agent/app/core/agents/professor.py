@@ -342,7 +342,6 @@ The professor has determined that this specific task requires your expertise in 
                 total_iterations=total_iterations,
                 final_evaluation=final_evaluation,
                 reasoning_section=reasoning_section,
-                metadata=specialist_solution.metadata,
             )
             
             # Create result with both formatted and raw data

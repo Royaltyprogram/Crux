@@ -106,11 +106,12 @@ class EvaluatorAgent(AbstractAgent):
         
         try:
             # Generate evaluation allowing code execution via function-calling API
-            evaluation = await self._generate_with_functions(
+            evaluation_result = await self._generate_with_functions(
                 prompt=evaluation_prompt,
                 functions=[],  # No custom functions – enables built-in code interpreter
                 temperature=self.temperature,
-            ).strip()
+            )
+            evaluation = evaluation_result.strip() if isinstance(evaluation_result, str) else str(evaluation_result).strip()
 
             # Prevent invalid empty evaluations from wrongly triggering stoppage
             if not evaluation or evaluation == "Cannot evaluate: no answer provided":

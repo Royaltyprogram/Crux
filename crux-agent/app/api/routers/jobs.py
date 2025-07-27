@@ -71,6 +71,7 @@ async def get_job_status(
             completed_at=completed_at,
             progress=float(job_data.get("progress", 0.0)),
             current_phase=job_data.get("current_phase"),
+            model_name=job_data.get("model_name"),
         )
         
         # Add result if completed

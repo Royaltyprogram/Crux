@@ -440,6 +440,9 @@ export default function TaskDetailPage() {
                 <span>
                   {result.converged ? "Converged" : "Max iterations reached"}
                 </span>
+                <span>
+                  Model: {task.modelName || "Unknown (legacy task)"}
+                </span>
               </div>
             )}
           </div>

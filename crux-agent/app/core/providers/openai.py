@@ -157,6 +157,7 @@ class OpenAIProvider(BaseProvider):
         system_prompt: Optional[str] = None,
         stream: bool = False,
         truncation: Optional[str] = "auto",
+        service_tier: Optional[str] = None,
         **kwargs: Any,
     ) -> str:
         """
@@ -189,6 +190,11 @@ class OpenAIProvider(BaseProvider):
                     "instructions": system_prompt or "",
                     "input": prompt,
                 }
+                
+                # Add service tier if specified (for flex pricing)
+                if service_tier:
+                    params["service_tier"] = service_tier
+                    logger.debug(f"Using service tier: {service_tier}")
                 
                 # Add reasoning parameters for o-series models
                 reasoning_effort = kwargs.pop("reasoning_effort", "high")  # 기본값 설정하고 kwargs에서 제거

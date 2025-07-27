@@ -64,6 +64,7 @@ async def solve_basic(
             "created_at": datetime.now(timezone.utc).isoformat(),
             "request": json.dumps(request.model_dump()),
             "mode": "basic",
+            "model_name": request.model_name or provider.model,
         }
         await redis_client.hset(f"job:{job_id}", mapping=job_data)
         # TESTING MODE: Extended TTL to prevent automatic deletion during testing
@@ -153,6 +154,7 @@ async def solve_enhanced(
             "created_at": datetime.now(timezone.utc).isoformat(),
             "request": json.dumps(request.model_dump()),
             "mode": "enhanced",
+            "model_name": request.model_name or provider.model,
         }
         await redis_client.hset(f"job:{job_id}", mapping=job_data)
         # TESTING MODE: Extended TTL to prevent automatic deletion during testing
@@ -291,6 +293,7 @@ async def continue_task(
         "mode": mode,
         "continued_from": job_id,
         "additional_iterations": additional_iterations,
+        "model_name": job_data.get("model_name", provider.model),
     }
     await redis_client.hset(f"job:{new_job_id}", mapping=continuation_job_data)
     await redis_client.expire(f"job:{new_job_id}", 86400 * 7)  # 7 days TTL
