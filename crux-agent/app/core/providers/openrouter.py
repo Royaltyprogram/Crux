@@ -4,15 +4,6 @@ OpenRouter provider implementation.
 import json
 from typing import Any, Dict, List, Optional
 
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-    wait_random_exponential,
-    RetryCallState,
-)
-
 from app.core.providers.base import BaseProvider, ProviderError
 from app.utils.logging import get_logger
 
@@ -21,98 +12,6 @@ logger = get_logger(__name__)
 
 class OpenRouterProvider(BaseProvider):
     """OpenRouter API provider implementation."""
-
-    def _with_json_retry(self, fn, *args, **kwargs):
-        """
-        Helper method to perform retries for JSON parsing using tenacity.
-
-        Args:
-            fn: The parsing function to retry.
-            *args: Positional arguments to pass to the parsing function.
-            **kwargs: Keyword arguments to pass to the parsing function.
-
-        Returns:
-            The result of the parsing function if successful.
-
-        Raises:
-            The last error encountered during retries.
-        """
-        attempt_count = 0
-        
-        def before_sleep(retry_state: RetryCallState):
-            nonlocal attempt_count
-            attempt_count += 1
-            if retry_state.outcome and retry_state.outcome.failed:
-                error = retry_state.outcome.exception()
-                error_type = type(error).__name__
-                error_msg = str(error)
-                logger.warning(
-                    f"JSON retry - method: _with_json_retry, "
-                    f"attempt: {attempt_count}/{self.max_retries}, "
-                    f"error_type: {error_type}, "
-                    f"error: {error_msg}"
-                )
-                logger.debug(
-                    f"Retrying JSON parsing in {retry_state.next_action.sleep if retry_state.next_action else 0:.2f}s"
-                )
-
-        @retry(
-            retry=retry_if_exception_type((json.JSONDecodeError, ProviderError)),
-            stop=stop_after_attempt(self.max_retries),
-            wait=wait_random_exponential(min=1, max=5),
-            before_sleep=before_sleep,
-            reraise=True
-        )
-        def retry_func():
-            return fn(*args, **kwargs)
-
-        return retry_func()
-    
-    async def _with_json_retry_async(self, fn, *args, **kwargs):
-        """
-        Async version of helper method to perform retries for JSON parsing using tenacity.
-
-        Args:
-            fn: The async parsing function to retry.
-            *args: Positional arguments to pass to the parsing function.
-            **kwargs: Keyword arguments to pass to the parsing function.
-
-        Returns:
-            The result of the parsing function if successful.
-
-        Raises:
-            The last error encountered during retries.
-        """
-        attempt_count = 0
-        
-        def before_sleep(retry_state: RetryCallState):
-            nonlocal attempt_count
-            attempt_count += 1
-            if retry_state.outcome and retry_state.outcome.failed:
-                error = retry_state.outcome.exception()
-                error_type = type(error).__name__
-                error_msg = str(error)
-                logger.warning(
-                    f"Async JSON retry - method: _with_json_retry_async, "
-                    f"attempt: {attempt_count}/{self.max_retries}, "
-                    f"error_type: {error_type}, "
-                    f"error: {error_msg}"
-                )
-                logger.debug(
-                    f"Retrying async JSON parsing in {retry_state.next_action.sleep if retry_state.next_action else 0:.2f}s"
-                )
-
-        @retry(
-            retry=retry_if_exception_type((json.JSONDecodeError, ProviderError)),
-            stop=stop_after_attempt(self.max_retries),
-            wait=wait_random_exponential(min=1, max=5),
-            before_sleep=before_sleep,
-            reraise=True
-        )
-        async def retry_func():
-            return await fn(*args, **kwargs)
-
-        return await retry_func()
     
     BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
     
@@ -205,8 +104,7 @@ class OpenRouterProvider(BaseProvider):
         # Add any additional parameters
         payload.update(kwargs)
         
-        async def _make_request_and_parse():
-            """Make API request and parse response. This will be retried on JSON errors."""
+        try:
             logger.debug(f"Calling OpenRouter API with model={self.model}")
             
             response = await self._make_request(
@@ -216,13 +114,7 @@ class OpenRouterProvider(BaseProvider):
                 headers=self._get_headers(),
             )
             
-            try:
-                data = response.json()
-            except json.JSONDecodeError as e:
-                # Log the raw response content for debugging
-                raw_content = response.text[:500] + "..." if len(response.text) > 500 else response.text
-                logger.warning(f"JSON parsing failed. Raw response preview: {raw_content}")
-                raise
+            data = response.json()
             
             if "choices" not in data or not data["choices"]:
                 raise ProviderError("Invalid response format from OpenRouter")
@@ -234,10 +126,6 @@ class OpenRouterProvider(BaseProvider):
                 logger.debug(f"OpenRouter usage: {data['usage']}")
             
             return content
-
-        try:
-            # Use the retry wrapper for the entire request and parsing process
-            return await self._with_json_retry_async(_make_request_and_parse)
             
         except Exception as e:
             logger.error(f"OpenRouter API error: {e}")
@@ -256,14 +144,6 @@ class OpenRouterProvider(BaseProvider):
         """
         Generate JSON completion using OpenRouter API.
         
-        Includes built-in retry resilience for JSON parsing:
-        - Automatically retries on JSON parsing failures (json.JSONDecodeError)
-        - Retries on provider errors during completion
-        - Fetches fresh responses on each retry attempt for better success rate
-        - Maximum retry attempts controlled by max_retries parameter
-        - Uses exponential backoff with random jitter (1-5 seconds)
-        - Attempts to extract JSON from partial responses when possible
-        
         Args:
             prompt: User prompt
             temperature: Sampling temperature
@@ -274,10 +154,6 @@ class OpenRouterProvider(BaseProvider):
             
         Returns:
             Parsed JSON object
-            
-        Raises:
-            json.JSONDecodeError: If JSON parsing fails after all retries
-            ProviderError: If API request fails after all retries
         """
         # Modify prompt to ensure JSON output
         json_prompt = f"{prompt}\n\nRespond with valid JSON only."
@@ -288,16 +164,24 @@ class OpenRouterProvider(BaseProvider):
             "You must respond with valid JSON only. Do not include any text outside the JSON object."
         ).strip()
         
-        def _attempt_json_parse(response: str) -> Dict[str, Any]:
-            """
-            Attempt to parse a JSON string.
-            """
+        try:
+            response = await self.complete(
+                prompt=json_prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                system_prompt=json_system_prompt,
+                truncation=truncation,
+                **kwargs,
+            )
+            
+            # Try to extract JSON from response
+            # Some models might add explanation before/after JSON
             response = response.strip()
-
+            
             # Find JSON boundaries
             start_idx = response.find("{")
             end_idx = response.rfind("}") + 1
-
+            
             if start_idx != -1 and end_idx > start_idx:
                 json_str = response[start_idx:end_idx]
             else:
@@ -308,30 +192,13 @@ class OpenRouterProvider(BaseProvider):
                     json_str = response[start_idx:end_idx]
                 else:
                     json_str = response
-
-            return json.loads(json_str)
-
-        async def _complete_and_parse_json() -> Dict[str, Any]:
-            """
-            Fetch a fresh response and attempt JSON parsing.
-            This function will be retried if JSON parsing fails.
-            """
-            # Get a fresh response on each attempt
-            response = await self.complete(
-                prompt=json_prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                system_prompt=json_system_prompt,
-                truncation=truncation,
-                **kwargs,
-            )
             
-            # Parse the JSON response
-            return _attempt_json_parse(response)
-
-        try:
-            # Use the retry wrapper for both completion and JSON parsing
-            return await self._with_json_retry_async(_complete_and_parse_json)
+            try:
+                return json.loads(json_str)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON response: {response}")
+                raise ProviderError(f"Invalid JSON response: {str(e)}") from e
+                
         except Exception as e:
             logger.error(f"JSON completion error: {e}")
             raise
@@ -396,43 +263,35 @@ class OpenRouterProvider(BaseProvider):
                     headers=self._get_headers(),
                 )
                 
-                def parse_function_response(response):
-                    data = response.json()
-                    
-                    if "choices" not in data or not data["choices"]:
-                        raise ProviderError("Invalid response format from OpenRouter")
-                    
-                    # Parse response and extract function calls
-                    choice = data["choices"][0]
-                    message = choice["message"]
-                    
-                    # Create response object
-                    class FunctionResponse:
-                        def __init__(self, content: str, function_calls: List[Any]):
-                            self.content = content
-                            self.function_calls = function_calls
-                    
-                    function_calls = []
-                    if "tool_calls" in message and message["tool_calls"]:
-                        for tool_call in message["tool_calls"]:
-                            if tool_call["type"] == "function":
-                                # Use retry helper for parsing function arguments
-                                arguments = self._with_json_retry(
-                                    json.loads, tool_call["function"]["arguments"]
-                                )
-                                function_calls.append(type('FunctionCall', (), {
-                                    'name': tool_call["function"]["name"],
-                                    'arguments': arguments
-                                })())
-                    
-                    content = message.get("content", "")
-                    
-                    logger.debug(f"OpenRouter function calling completed, {len(function_calls)} function calls")
-                    
-                    return FunctionResponse(content, function_calls)
-
-                # Use the retry wrapper for JSON parsing  
-                return self._with_json_retry(parse_function_response, response)
+                data = response.json()
+                
+                if "choices" not in data or not data["choices"]:
+                    raise ProviderError("Invalid response format from OpenRouter")
+                
+                # Parse response and extract function calls
+                choice = data["choices"][0]
+                message = choice["message"]
+                
+                # Create response object
+                class FunctionResponse:
+                    def __init__(self, content: str, function_calls: List[Any]):
+                        self.content = content
+                        self.function_calls = function_calls
+                
+                function_calls = []
+                if "tool_calls" in message and message["tool_calls"]:
+                    for tool_call in message["tool_calls"]:
+                        if tool_call["type"] == "function":
+                            function_calls.append(type('FunctionCall', (), {
+                                'name': tool_call["function"]["name"],
+                                'arguments': json.loads(tool_call["function"]["arguments"])
+                            })())
+                
+                content = message.get("content", "")
+                
+                logger.debug(f"OpenRouter function calling completed, {len(function_calls)} function calls")
+                
+                return FunctionResponse(content, function_calls)
                 
             except Exception as e:
                 logger.warning(f"Function calling failed, falling back to regular generation: {e}")
@@ -472,13 +331,9 @@ class OpenRouterProvider(BaseProvider):
                 headers=self._get_headers(),
             )
             
-            def parse_models_response(response):
-                data = response.json()
-                return data.get("data", [])
-
-            # Use the retry wrapper for JSON parsing
-            return self._with_json_retry(parse_models_response, response)
+            data = response.json()
+            return data.get("data", [])
             
         except Exception as e:
             logger.error(f"Failed to list models: {e}")
-            raise ProviderError(f"Failed to list models: {str(e)}") from e
+            raise ProviderError(f"Failed to list models: {str(e)}") from e 

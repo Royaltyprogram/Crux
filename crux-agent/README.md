@@ -179,51 +179,6 @@ pnpm dev
 # The frontend will be available at http://localhost:3000
 ```
 
-## Retry Behavior
-
-The Crux Agent includes robust retry mechanisms for resilient API interactions:
-
-### Retry Types
-
-- **HTTP Retry**: Automatically retries on network timeouts and server errors with exponential backoff (1-5 seconds).
-- **JSON Parsing Retry**: Retries JSON parsing failures using fresh responses for improved success rates.
-- **Function Argument Parsing**: Retries parsing of function calling arguments when malformed JSON is received.
-
-### Error Types That Trigger Retries
-
-- `httpx.TimeoutException`: Network timeouts
-- `httpx.HTTPStatusError`: HTTP 4xx/5xx server errors (excluding permanent failures)
-- `json.JSONDecodeError`: Malformed JSON responses
-- `ProviderError`: General provider-level errors during API calls
-
-### Configuration
-
-Configure retry behavior using the `max_retries` parameter when initializing providers:
-
-```python
-from app.core.providers.openai import OpenAIProvider
-from app.core.providers.openrouter import OpenRouterProvider
-
-# Configure with custom retry count
-openai_provider = OpenAIProvider(
-    api_key="your-api-key",
-    model="gpt-4o-mini",
-    max_retries=5  # Increase retries for better resilience
-)
-
-openrouter_provider = OpenRouterProvider(
-    api_key="your-api-key", 
-    model="mistralai/mistral-7b-instruct",
-    max_retries=2  # Reduce retries for faster failures
-)
-```
-
-**Default Configuration:**
-- Maximum retry attempts: 3
-- Backoff strategy: Exponential with random jitter
-- Retry delay range: 1-5 seconds
-- Fresh responses: JSON parsing retries fetch new responses on each attempt
-
 ## API Endpoints
 
 - `POST /api/v1/solve/basic` - Basic mode solving

@@ -18,9 +18,7 @@ import {
 } from "@/components/ui/accordion";
 import { Progress } from "@/components/ui/progress";
 import { useTasks, type Task } from "@/hooks/use-tasks";
-import { formatDuration, formatTokens, apiClient } from "@/lib/api";
-import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { formatDuration, formatTokens } from "@/lib/api";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
 import "katex/dist/katex.min.css";
@@ -222,47 +220,10 @@ interface TaskMetadata {
 
 export default function TaskDetailPage() {
   const params = useParams();
-  const router = useRouter();
-  const { tasks, refreshTasks } = useTasks();
+  const { tasks } = useTasks();
   const [loading, setLoading] = useState(true);
-  const [continuing, setContinuing] = useState(false);
 
   const task = tasks.find((t) => t.id === params.id);
-
-  const handleContinueTask = async () => {
-    if (!task || continuing) return;
-    
-    setContinuing(true);
-    try {
-      const response = await apiClient.continueTask(task.id, 1); // Add 1 more iteration
-      
-      // Add the new continuation task to the task list
-      const newTask = {
-        id: response.job_id,
-        topic: `${task.topic} (Continued +1)`,
-        mode: task.mode,
-        status: "pending" as const,
-        createdAt: response.created_at,
-        progress: 0,
-        currentPhase: "Initializing",
-      };
-      
-      // Get the current tasks from localStorage and add the new one
-      const storedTasks = localStorage.getItem("crux-tasks");
-      const currentTasks = storedTasks ? JSON.parse(storedTasks) : [];
-      const updatedTasks = [newTask, ...currentTasks];
-      localStorage.setItem("crux-tasks", JSON.stringify(updatedTasks));
-      
-      toast.success("Task continuation started successfully!");
-      await refreshTasks();
-      router.push(`/task/${response.job_id}`);
-    } catch (error) {
-      console.error("Error continuing task:", error);
-      toast.error("Failed to continue task. Please try again.");
-    } finally {
-      setContinuing(false);
-    }
-  };
 
   useEffect(() => {
     const timer = setTimeout(() => setLoading(false), 1000);
@@ -365,9 +326,6 @@ export default function TaskDetailPage() {
   const evolutionHistory = metadata.evolution_history || [];
   const specialistResults = metadata.specialist_results || [];
   const isEnhanced = task.mode === "enhanced";
-  
-  // Check if task can be continued (completed, not converged, reached max iterations)
-  const canContinueTask = result && !result.converged && task.status === "completed";
 
   return (
     <div className="min-h-screen bg-white">
@@ -439,9 +397,6 @@ export default function TaskDetailPage() {
                 <span>{formatDuration(result.processing_time || 0)}</span>
                 <span>
                   {result.converged ? "Converged" : "Max iterations reached"}
-                </span>
-                <span>
-                  Model: {task.modelName || "Unknown (legacy task)"}
                 </span>
               </div>
             )}
@@ -546,15 +501,6 @@ export default function TaskDetailPage() {
               Start New Research
             </Button>
           </Link>
-          {canContinueTask && (
-            <Button
-              onClick={handleContinueTask}
-              disabled={continuing}
-              className="font-mono bg-blue-600 text-white hover:bg-blue-700 border border-blue-600 px-6 py-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {continuing ? "Starting..." : "Continue +1 Iteration"}
-            </Button>
-          )}
         </div>
       </main>
     </div>

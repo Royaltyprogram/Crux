@@ -4,7 +4,7 @@ Solve endpoints for basic and enhanced modes.
 import json
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Annotated
 
 import redis.asyncio as redis
@@ -61,14 +61,12 @@ async def solve_basic(
         job_data = {
             "job_id": job_id,
             "status": JobStatus.PENDING.value,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(datetime.UTC).isoformat(),
             "request": json.dumps(request.model_dump()),
             "mode": "basic",
-            "model_name": request.model_name or provider.model,
         }
         await redis_client.hset(f"job:{job_id}", mapping=job_data)
-        # TESTING MODE: Extended TTL to prevent automatic deletion during testing
-        await redis_client.expire(f"job:{job_id}", 86400 * 7)  # 7 days TTL (was 1 hour)
+        await redis_client.expire(f"job:{job_id}", 3600)  # 1 hour TTL
         
         # Submit task to Celery
         celery_app.send_task(
@@ -80,7 +78,7 @@ async def solve_basic(
         return AsyncJobResponse(
             job_id=job_id,
             status=JobStatus.PENDING,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(datetime.UTC),
             message="Job submitted successfully",
         )
     
@@ -151,14 +149,12 @@ async def solve_enhanced(
         job_data = {
             "job_id": job_id,
             "status": JobStatus.PENDING.value,
-            "created_at": datetime.now(timezone.utc).isoformat(),
+            "created_at": datetime.now(datetime.UTC).isoformat(),
             "request": json.dumps(request.model_dump()),
             "mode": "enhanced",
-            "model_name": request.model_name or provider.model,
         }
         await redis_client.hset(f"job:{job_id}", mapping=job_data)
-        # TESTING MODE: Extended TTL to prevent automatic deletion during testing
-        await redis_client.expire(f"job:{job_id}", 86400 * 7)  # 7 days TTL (was 1 hour)
+        await redis_client.expire(f"job:{job_id}", 3600)  # 1 hour TTL
         
         # Submit task to Celery
         celery_app.send_task(
@@ -170,7 +166,7 @@ async def solve_enhanced(
         return AsyncJobResponse(
             job_id=job_id,
             status=JobStatus.PENDING,
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(datetime.UTC),
             message="Job submitted successfully",
         )
     
@@ -209,112 +205,3 @@ async def solve_enhanced(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Solve failed: {str(e)}",
         )
-
-
-@router.post("/continue/{job_id}", response_model=SolutionResponse | AsyncJobResponse)
-async def continue_task(
-    job_id: str,
-    provider: Annotated[BaseProvider, Depends(get_provider)],
-    redis_client: Annotated[redis.Redis, Depends(get_redis)],
-    celery_app: Annotated[Celery, Depends(get_celery)],
-    request_id: Annotated[str, Depends(get_request_id)],
-    additional_iterations: int = 1,
-) -> SolutionResponse | AsyncJobResponse:
-    """
-    Continue a completed task with additional iterations.
-    
-    This endpoint allows extending a task that reached max iterations
-    but hasn't converged by adding more iterations.
-    
-    Args:
-        job_id: The job ID to continue
-        additional_iterations: Number of additional iterations to run (default: 1)
-    
-    Returns:
-        New solution with extended iterations or async job response
-    """
-    logger.info(f"Continue task request: {job_id} (+{additional_iterations} iterations) [request_id={request_id}]")
-    
-    # Check if job exists
-    job_data = await redis_client.hgetall(f"job:{job_id}")
-    if not job_data:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Job {job_id} not found",
-        )
-    
-    # Decode bytes to strings
-    job_data = {k.decode(): v.decode() for k, v in job_data.items()}
-    
-    # Check if job is completed
-    if job_data.get("status") != JobStatus.COMPLETED.value:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Job {job_id} is not completed. Current status: {job_data.get('status')}",
-        )
-    
-    # Parse the result to get evolution history
-    try:
-        result = json.loads(job_data.get("result", "{}"))
-        evolution_history = result.get("metadata", {}).get("evolution_history", [])
-        
-        if not evolution_history:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Job has no evolution history to continue from",
-            )
-        
-        # Check if task already converged
-        if result.get("converged", False):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Task already converged. Cannot continue a converged task.",
-            )
-        
-        # Parse original request
-        original_request = json.loads(job_data.get("request", "{}"))
-        mode = job_data.get("mode", "basic")
-        
-    except (json.JSONDecodeError, KeyError) as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid job data: {str(e)}",
-        )
-    
-    # Create new job ID for the continuation
-    new_job_id = str(uuid.uuid4())
-    
-    # Store initial job info in Redis
-    continuation_job_data = {
-        "job_id": new_job_id,
-        "status": JobStatus.PENDING.value,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "request": json.dumps(original_request),
-        "mode": mode,
-        "continued_from": job_id,
-        "additional_iterations": additional_iterations,
-        "model_name": job_data.get("model_name", provider.model),
-    }
-    await redis_client.hset(f"job:{new_job_id}", mapping=continuation_job_data)
-    await redis_client.expire(f"job:{new_job_id}", 86400 * 7)  # 7 days TTL
-    
-    # Submit continuation task to Celery
-    if mode == "basic":
-        celery_app.send_task(
-            "app.worker.continue_basic_task",
-            args=[new_job_id, original_request, evolution_history, additional_iterations],
-            task_id=new_job_id,
-        )
-    else:
-        # For now, only support basic mode continuation
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Task continuation is currently only supported for basic mode",
-        )
-    
-    return AsyncJobResponse(
-        job_id=new_job_id,
-        status=JobStatus.PENDING,
-        created_at=datetime.now(timezone.utc),
-        message=f"Task continuation submitted successfully (+{additional_iterations} iterations)",
-    )

@@ -2,14 +2,14 @@
 Job status and management endpoints.
 """
 import json
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Annotated
 
 import redis.asyncio as redis
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, status
 from celery import Celery
 
-from app.api.dependencies import get_redis, get_celery
+from app.api.dependencies import get_current_user_from_api_key, get_redis, rate_limiter_standard, verify_api_key, get_celery
 from app.schemas.response import JobStatus, JobStatusResponse, SolutionResponse
 from app.utils.logging import get_logger
 
@@ -18,12 +18,14 @@ logger = get_logger(__name__)
 router = APIRouter(
     prefix="/jobs",
     tags=["jobs"],
+    dependencies=[Depends(verify_api_key), Depends(rate_limiter_standard)],
 )
 
 
 @router.get("/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(
     job_id: Annotated[str, Path(description="Job ID to check status")],
+    current_user: Annotated[dict, Depends(get_current_user_from_api_key)],
     include_partial_results: Annotated[bool, Query(description="Whether to include partial results if job is still running")] = False,
     include_evolution_history: Annotated[bool, Query(description="Whether to include detailed evolution history in results")] = False,
     include_specialist_details: Annotated[bool, Query(description="Whether to include detailed specialist consultation results")] = False,
@@ -34,7 +36,7 @@ async def get_job_status(
     
     Check the status of an asynchronous job and retrieve results when complete.
     """
-    logger.info(f"Checking job status: {job_id}")
+    logger.info(f"Checking job status: {job_id} [user_id={current_user['id']}]")
     
     try:
         # Get job data from Redis
@@ -71,7 +73,6 @@ async def get_job_status(
             completed_at=completed_at,
             progress=float(job_data.get("progress", 0.0)),
             current_phase=job_data.get("current_phase"),
-            model_name=job_data.get("model_name"),
         )
         
         # Add result if completed
@@ -102,6 +103,7 @@ async def get_job_status(
 @router.delete("/{job_id}")
 async def cancel_job(
     job_id: Annotated[str, Path(description="Job ID to cancel")],
+    current_user: Annotated[dict, Depends(get_current_user_from_api_key)],
     celery_app: Annotated[Celery, Depends(get_celery)],
     redis_client: Annotated[redis.Redis, Depends(get_redis)] = None,
 ) -> dict:
@@ -111,7 +113,7 @@ async def cancel_job(
     Note: This sets the job status to cancelled but doesn't stop running workers.
     Full cancellation requires Celery task revocation.
     """
-    logger.info(f"Cancelling job: {job_id}")
+    logger.info(f"Cancelling job: {job_id} [user_id={current_user['id']}]")
     
     try:
         # Check if job exists
@@ -138,7 +140,7 @@ async def cancel_job(
             f"job:{job_id}",
             mapping={
                 "status": JobStatus.CANCELLED.value,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
+                "completed_at": datetime.now(datetime.UTC).isoformat(),
             },
         )
 

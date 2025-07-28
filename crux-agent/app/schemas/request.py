@@ -29,9 +29,6 @@ class SolveRequest(BaseModel):
     n_iters: Optional[int] = Field(None, ge=1, le=10, description="Maximum iterations (overrides default for basic mode)")
     professor_max_iters: Optional[int] = Field(None, ge=1, le=10, description="Maximum iterations for Professor level (default: 2)")
     specialist_max_iters: Optional[int] = Field(None, ge=1, le=8, description="Maximum iterations for Specialist level (default: 4)")
-    llm_provider: Optional[str] = Field(None, description="LLM provider to use (e.g., 'openai', 'openrouter')")
-    model_name: Optional[str] = Field(None, description="Model name to use (e.g., 'gpt-4o', 'meta-llama/llama-3.3-70b-instruct')")
-    use_flex_tier: bool = Field(False, description="Use OpenAI flex service tier for lower cost (slower, OpenAI only)")
     async_mode: bool = Field(False, description="Whether to run asynchronously and return job ID")
     
     @field_validator("question")

@@ -13,7 +13,6 @@ export interface Task {
   completedAt?: string;
   progress: number;
   currentPhase: string;
-  modelName?: string;
   result?: TaskResult;
   error?: string;
 }
@@ -78,7 +77,6 @@ export function useTasks() {
               currentPhase: jobResponse.current_phase,
               startedAt: jobResponse.started_at,
               completedAt: jobResponse.completed_at,
-              modelName: jobResponse.model_name,
               result: jobResponse.result,
             };
             return updatedTask;

@@ -44,7 +44,6 @@ class AbstractAgent(ABC):
         provider: BaseProvider,
         system_prompt: Optional[str] = None,
         temperature: float = 0.7,
-        service_tier: Optional[str] = None,
     ):
         """
         Initialize agent.
@@ -59,7 +58,6 @@ class AbstractAgent(ABC):
         self.provider = provider
         self.system_prompt = system_prompt
         self.temperature = temperature
-        self.service_tier = service_tier
         
     @abstractmethod
     async def run(self, context: AgentContext) -> AgentResult:
@@ -93,10 +91,6 @@ class AbstractAgent(ABC):
         Returns:
             Generated text
         """
-        # Add service_tier if configured and provider supports it (OpenAI only)
-        if self.service_tier and hasattr(self.provider, 'model') and self.provider.model.lower().startswith('o'):
-            kwargs['service_tier'] = self.service_tier
-        
         return await self.provider.complete(
             prompt=prompt,
             system_prompt=system_prompt or self.system_prompt,

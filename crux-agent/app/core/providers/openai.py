@@ -6,14 +6,6 @@ from typing import Any, Dict, List, Optional
 
 from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionMessageParam
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-    wait_random_exponential,
-    RetryCallState,
-)
 
 from app.core.providers.base import BaseProvider, ProviderError
 from app.utils.logging import get_logger
@@ -49,105 +41,6 @@ class OpenAIProvider(BaseProvider):
         # Response API conversation continuation (o-series only)
         self.current_response_id: Optional[str] = None
     
-    def _with_json_retry(self, fn, *args, **kwargs):
-        """
-        Helper method to perform retries for JSON parsing using tenacity.
-        
-        Provides resilient JSON parsing with automatic retry on failures:
-        - Retries on json.JSONDecodeError and ProviderError
-        - Uses exponential backoff with random jitter (1-5 seconds)
-        - Maximum attempts controlled by self.max_retries
-        - Logs retry attempts for debugging
-
-        Args:
-            fn: The parsing function to retry.
-            *args: Positional arguments to pass to the parsing function.
-            **kwargs: Keyword arguments to pass to the parsing function.
-
-        Returns:
-            The result of the parsing function if successful.
-
-        Raises:
-            json.JSONDecodeError: If JSON parsing fails after all retries
-            ProviderError: If provider error occurs after all retries
-        """
-        attempt_count = 0
-        
-        def before_sleep(retry_state: RetryCallState):
-            nonlocal attempt_count
-            attempt_count += 1
-            if retry_state.outcome and retry_state.outcome.failed:
-                error = retry_state.outcome.exception()
-                error_type = type(error).__name__
-                error_msg = str(error)
-                logger.warning(
-                    f"JSON retry - method: _with_json_retry, "
-                    f"attempt: {attempt_count}/{self.max_retries}, "
-                    f"error_type: {error_type}, "
-                    f"error: {error_msg}"
-                )
-                logger.debug(
-                    f"Retrying JSON parsing in {retry_state.next_action.sleep if retry_state.next_action else 0:.2f}s"
-                )
-
-        @retry(
-            retry=retry_if_exception_type((json.JSONDecodeError, ProviderError)),
-            stop=stop_after_attempt(self.max_retries),
-            wait=wait_random_exponential(min=1, max=5),
-            before_sleep=before_sleep,
-            reraise=True
-        )
-        def retry_func():
-            return fn(*args, **kwargs)
-
-        return retry_func()
-    
-    async def _with_json_retry_async(self, fn, *args, **kwargs):
-        """
-        Async version of helper method to perform retries for JSON parsing using tenacity.
-
-        Args:
-            fn: The async parsing function to retry.
-            *args: Positional arguments to pass to the parsing function.
-            **kwargs: Keyword arguments to pass to the parsing function.
-
-        Returns:
-            The result of the parsing function if successful.
-
-        Raises:
-            The last error encountered during retries.
-        """
-        attempt_count = 0
-        
-        def before_sleep(retry_state: RetryCallState):
-            nonlocal attempt_count
-            attempt_count += 1
-            if retry_state.outcome and retry_state.outcome.failed:
-                error = retry_state.outcome.exception()
-                error_type = type(error).__name__
-                error_msg = str(error)
-                logger.warning(
-                    f"Async JSON retry - method: _with_json_retry_async, "
-                    f"attempt: {attempt_count}/{self.max_retries}, "
-                    f"error_type: {error_type}, "
-                    f"error: {error_msg}"
-                )
-                logger.debug(
-                    f"Retrying async JSON parsing in {retry_state.next_action.sleep if retry_state.next_action else 0:.2f}s"
-                )
-
-        @retry(
-            retry=retry_if_exception_type((json.JSONDecodeError, ProviderError)),
-            stop=stop_after_attempt(self.max_retries),
-            wait=wait_random_exponential(min=1, max=5),
-            before_sleep=before_sleep,
-            reraise=True
-        )
-        async def retry_func():
-            return await fn(*args, **kwargs)
-
-        return await retry_func()
-    
     async def complete(
         self,
         *,
@@ -157,7 +50,6 @@ class OpenAIProvider(BaseProvider):
         system_prompt: Optional[str] = None,
         stream: bool = False,
         truncation: Optional[str] = "auto",
-        service_tier: Optional[str] = None,
         **kwargs: Any,
     ) -> str:
         """
@@ -190,11 +82,6 @@ class OpenAIProvider(BaseProvider):
                     "instructions": system_prompt or "",
                     "input": prompt,
                 }
-                
-                # Add service tier if specified (for flex pricing)
-                if service_tier:
-                    params["service_tier"] = service_tier
-                    logger.debug(f"Using service tier: {service_tier}")
                 
                 # Add reasoning parameters for o-series models
                 reasoning_effort = kwargs.pop("reasoning_effort", "high")  # 기본값 설정하고 kwargs에서 제거
@@ -545,13 +432,9 @@ class OpenAIProvider(BaseProvider):
             if message.tool_calls:
                 for tool_call in message.tool_calls:
                     if tool_call.type == "function":
-                        # Use retry wrapper for parsing function arguments
-                        arguments = self._with_json_retry(
-                            json.loads, tool_call.function.arguments
-                        )
                         function_calls.append(type('FunctionCall', (), {
                             'name': tool_call.function.name,
-                            'arguments': arguments
+                            'arguments': json.loads(tool_call.function.arguments)
                         })())
             
             content = message.content or ""
@@ -577,12 +460,7 @@ class OpenAIProvider(BaseProvider):
         """
         Generate JSON completion using OpenAI API.
         
-        Uses JSON mode to ensure valid JSON output with built-in retry resilience:
-        - Automatically retries on JSON parsing failures (json.JSONDecodeError)
-        - Retries on provider errors during completion
-        - Fetches fresh responses on each retry attempt for better success rate
-        - Maximum retry attempts controlled by max_retries parameter
-        - Uses exponential backoff with random jitter (1-5 seconds)
+        Uses JSON mode to ensure valid JSON output.
         
         Args:
             prompt: User prompt
@@ -594,10 +472,6 @@ class OpenAIProvider(BaseProvider):
             
         Returns:
             Parsed JSON object
-            
-        Raises:
-            json.JSONDecodeError: If JSON parsing fails after all retries
-            ProviderError: If API request fails after all retries
         """
         # Ensure system prompt includes JSON instruction
         json_system_prompt = (
@@ -605,16 +479,11 @@ class OpenAIProvider(BaseProvider):
             "You must respond with valid JSON only. Do not include any text outside the JSON object."
         ).strip()
         
-        # Use JSON mode if available (GPT-4 Turbo and newer)
-        if self.model in ["gpt-4-turbo-preview", "gpt-4o", "gpt-4o-mini"]:
-            kwargs["response_format"] = {"type": "json_object"}
-        
-        async def _complete_and_parse_json() -> Dict[str, Any]:
-            """
-            Fetch a fresh response and attempt JSON parsing.
-            This function will be retried if JSON parsing fails.
-            """
-            # Get a fresh response on each attempt
+        try:
+            # Use JSON mode if available (GPT-4 Turbo and newer)
+            if self.model in ["gpt-4-turbo-preview", "gpt-4o", "gpt-4o-mini"]:
+                kwargs["response_format"] = {"type": "json_object"}
+            
             response = await self.complete(
                 prompt=prompt,
                 temperature=temperature,
@@ -624,12 +493,12 @@ class OpenAIProvider(BaseProvider):
                 **kwargs,
             )
             
-            # Parse the JSON response
-            return json.loads(response)
-        
-        try:
-            # Use the retry wrapper for both completion and JSON parsing
-            return await self._with_json_retry_async(_complete_and_parse_json)
+            # Parse JSON response
+            try:
+                return json.loads(response)
+            except json.JSONDecodeError as e:
+                logger.error(f"Failed to parse JSON response: {response}")
+                raise ProviderError(f"Invalid JSON response: {str(e)}") from e
                 
         except Exception as e:
             logger.error(f"JSON completion error: {e}")

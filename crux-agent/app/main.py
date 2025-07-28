@@ -13,7 +13,6 @@ from fastapi.responses import JSONResponse
 from app import __version__
 from app.api import dependencies
 from app.api.routers import jobs, solve
-from app.api.routers import settings as settings_router
 from app.core.providers.factory import create_provider
 from app.schemas.response import ErrorResponse, HealthResponse
 from app.settings import settings
@@ -121,7 +120,6 @@ def create_app() -> FastAPI:
     # Include routers
     app.include_router(solve.router, prefix=settings.api_v1_str)
     app.include_router(jobs.router, prefix=settings.api_v1_str)
-    app.include_router(settings_router.router, prefix=settings.api_v1_str)
     
     # Root endpoint
     @app.get("/", include_in_schema=False)
