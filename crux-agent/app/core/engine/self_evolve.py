@@ -303,7 +303,8 @@ class SelfEvolve:
 
             # Check exit conditions
             if should_stop:
-                logger.info("Evaluator issued <stop> token. Solution is complete.")
+                logger.info(f"Evaluator issued <stop> token after iteration {iteration}. Solution is complete.")
+                logger.info(f"Final evaluation feedback: {eval_result.feedback[:200] if eval_result else 'No evaluation'}...")
                 break
 
             # Step 3: Refine prompt for next iteration (if not last iteration)

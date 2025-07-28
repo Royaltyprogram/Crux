@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     
     # Enhanced Mode Settings
     specialist_max_iters: int = Field(default=6, ge=1, le=8, description="Maximum iterations for specialists in enhanced mode")
-    professor_max_iters: int = Field(default=3, ge=1, le=10, description="Maximum iterations for professor in enhanced mode")
+    professor_max_iters: int = Field(default=6, ge=1, le=10, description="Maximum iterations for professor in enhanced mode")
     
     # Advanced Features Settings
     max_function_call_iterations: int = Field(default=30, ge=1, le=50, description="Maximum function call iterations to prevent infinite loops")
