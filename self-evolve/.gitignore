@@ -7,3 +7,6 @@ __pycache__/
 
 logs/
 logs/openai_example.jsonl
+
+
+examples/results/
