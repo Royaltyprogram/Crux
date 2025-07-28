@@ -175,14 +175,10 @@ async def _solve_basic_async(job_id: str, request_data: dict, task):
         model=request_data.get("model_name"),
     )
     
-    # Determine service tier for OpenAI flex pricing
-    service_tier = "flex" if request_data.get("use_flex_tier", False) else None
-    
     # Create runner
     runner = BasicRunner(
         provider=provider,
         max_iters=request_data.get("n_iters") or settings.max_iters,
-        service_tier=service_tier,
     )
     
     # Setup progress tracking
@@ -310,14 +306,10 @@ async def _continue_basic_async(job_id: str, original_request_data: dict, evolut
         model=original_request_data.get("model_name"),
     )
     
-    # Determine service tier for OpenAI flex pricing
-    service_tier = "flex" if original_request_data.get("use_flex_tier", False) else None
-    
     # Create runner
     runner = BasicRunner(
         provider=provider,
         max_iters=original_request_data.get("n_iters") or settings.max_iters,  # This will be overridden in resume_solve
-        service_tier=service_tier,
     )
     
     # Setup progress tracking

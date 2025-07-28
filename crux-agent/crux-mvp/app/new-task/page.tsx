@@ -8,12 +8,23 @@ import Image from "next/image";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { type AsyncJobResponse, type TaskResult, type SettingsResponse, apiClient } from "@/lib/api";
+import {
+  type AsyncJobResponse,
+  type TaskResult,
+  type SettingsResponse,
+  apiClient,
+} from "@/lib/api";
 import { useTasks } from "@/hooks/use-tasks";
 
 export default function NewTaskPage() {
@@ -23,13 +34,12 @@ export default function NewTaskPage() {
   const [error, setError] = useState<string | null>(null);
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  
+
   // Override settings
   const [maxIters, setMaxIters] = useState<string>("");
   const [specialistMaxIters, setSpecialistMaxIters] = useState<string>("");
   const [professorMaxIters, setProfessorMaxIters] = useState<string>("");
-  const [useFlexTier, setUseFlexTier] = useState(false);
-  
+
   const router = useRouter();
   const { addTask, startPolling } = useTasks();
 
@@ -44,7 +54,7 @@ export default function NewTaskPage() {
         setSpecialistMaxIters(settingsData.specialist_max_iters.toString());
         setProfessorMaxIters(settingsData.professor_max_iters.toString());
       } catch (err) {
-        console.error('Failed to load settings:', err);
+        console.error("Failed to load settings:", err);
       }
     };
     loadSettings();
@@ -62,28 +72,29 @@ export default function NewTaskPage() {
 
       // Prepare override values (only include if different from defaults and not empty)
       const overrides: any = {};
-      
+
       if (maxIters && maxIters !== settings?.max_iters.toString()) {
         overrides.n_iters = parseInt(maxIters);
       }
-      
-      if (specialistMaxIters && specialistMaxIters !== settings?.specialist_max_iters.toString()) {
+
+      if (
+        specialistMaxIters &&
+        specialistMaxIters !== settings?.specialist_max_iters.toString()
+      ) {
         overrides.specialist_max_iters = parseInt(specialistMaxIters);
       }
-      
-      if (professorMaxIters && professorMaxIters !== settings?.professor_max_iters.toString()) {
+
+      if (
+        professorMaxIters &&
+        professorMaxIters !== settings?.professor_max_iters.toString()
+      ) {
         overrides.professor_max_iters = parseInt(professorMaxIters);
       }
-      
+
       // Add provider and model selection (these will need to be handled by the backend)
       if (settings) {
         overrides.llm_provider = settings.llm_provider;
         overrides.model_name = settings.model_name;
-        
-        // Add flex tier option if enabled
-        if (useFlexTier) {
-          overrides.use_flex_tier = true;
-        }
       }
 
       if (mode === "basic") {
@@ -216,72 +227,67 @@ export default function NewTaskPage() {
           {settings && (
             <div className="space-y-4">
               <Label className="font-mono text-sm text-black">Provider</Label>
-              <Select onValueChange={(value) => {
-                // When provider changes, update to the first available model for that provider
-                const newModelName = value === 'openai' 
-                  ? settings.openai_models[0] 
-                  : settings.openrouter_models[0];
-                setSettings({ ...settings, llm_provider: value, model_name: newModelName });
-              }} value={settings.llm_provider}
-              disabled={isSubmitting}>
+              <Select
+                onValueChange={(value) => {
+                  // When provider changes, update to the first available model for that provider
+                  const newModelName =
+                    value === "openai"
+                      ? settings.openai_models[0]
+                      : settings.openrouter_models[0];
+                  setSettings({
+                    ...settings,
+                    llm_provider: value,
+                    model_name: newModelName,
+                  });
+                }}
+                value={settings.llm_provider}
+                disabled={isSubmitting}
+              >
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Select provider" />
                 </SelectTrigger>
                 <SelectContent>
                   {settings.available_providers.map((provider) => (
-                    <SelectItem key={provider} value={provider}>{provider}</SelectItem>
+                    <SelectItem key={provider} value={provider}>
+                      {provider}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
 
               {/* Model Selection */}
               <Label className="font-mono text-sm text-black">Model</Label>
-              <Select 
+              <Select
                 key={`${settings.llm_provider}-model-select`}
                 onValueChange={(value) => {
                   setSettings({ ...settings, model_name: value });
-                }} 
+                }}
                 value={settings.model_name}
-                disabled={isSubmitting}>
+                disabled={isSubmitting}
+              >
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Select model" />
                 </SelectTrigger>
                 <SelectContent>
-                  {(settings.llm_provider === 'openai' ? settings.openai_models : settings.openrouter_models).map((model) => (
-                    <SelectItem key={model} value={model}>{model}</SelectItem>
+                  {(settings.llm_provider === "openai"
+                    ? settings.openai_models
+                    : settings.openrouter_models
+                  ).map((model) => (
+                    <SelectItem key={model} value={model}>
+                      {model}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              
+
               {/* Debug info */}
               <div className="font-mono text-xs text-gray-500">
-                Available models for {settings.llm_provider}: {(settings.llm_provider === 'openai' ? settings.openai_models : settings.openrouter_models).join(', ')}
+                Available models for {settings.llm_provider}:{" "}
+                {(settings.llm_provider === "openai"
+                  ? settings.openai_models
+                  : settings.openrouter_models
+                ).join(", ")}
               </div>
-
-              {/* Flex Tier Option - Only show for OpenAI and o-series models */}
-              {settings.llm_provider === 'openai' && settings.model_name.toLowerCase().startsWith('o') && (
-                <div className="space-y-3 pt-2">
-                  <div className="flex items-center space-x-3">
-                    <Checkbox
-                      id="flex-tier"
-                      checked={useFlexTier}
-                      onCheckedChange={(checked) => setUseFlexTier(checked === true)}
-                      className="border-gray-400 data-[state=checked]:bg-black data-[state=checked]:border-black"
-                      disabled={isSubmitting}
-                    />
-                    <Label
-                      htmlFor="flex-tier"
-                      className="font-mono text-sm text-black cursor-pointer"
-                    >
-                      Use Flex Service Tier (50% cost, slower processing)
-                    </Label>
-                  </div>
-                  <p className="font-mono text-xs text-gray-600 leading-relaxed ml-6">
-                    Flex tier offers significant cost savings for O-series models but may take longer to process.
-                    Perfect for non-urgent tasks where cost efficiency is prioritized.
-                  </p>
-                </div>
-              )}
             </div>
           )}
           <div className="space-y-4">
@@ -345,19 +351,28 @@ export default function NewTaskPage() {
               </h3>
               <div className="grid grid-cols-2 gap-4 font-mono text-xs text-gray-600">
                 <div>
-                  <span className="text-black">Provider:</span> {settings.llm_provider}
+                  <span className="text-black">Provider:</span>{" "}
+                  {settings.llm_provider}
                 </div>
                 <div>
-                  <span className="text-black">Model:</span> {settings.model_name}
+                  <span className="text-black">Model:</span>{" "}
+                  {settings.model_name}
                 </div>
                 <div>
-                  <span className="text-black">Basic Max Iterations:</span> {settings.max_iters}
+                  <span className="text-black">Basic Max Iterations:</span>{" "}
+                  {settings.max_iters}
                 </div>
                 <div>
-                  <span className="text-black">Enhanced Specialist Iterations:</span> {settings.specialist_max_iters}
+                  <span className="text-black">
+                    Enhanced Specialist Iterations:
+                  </span>{" "}
+                  {settings.specialist_max_iters}
                 </div>
                 <div>
-                  <span className="text-black">Enhanced Professor Iterations:</span> {settings.professor_max_iters}
+                  <span className="text-black">
+                    Enhanced Professor Iterations:
+                  </span>{" "}
+                  {settings.professor_max_iters}
                 </div>
               </div>
             </div>
@@ -377,16 +392,17 @@ export default function NewTaskPage() {
                 className="font-mono text-xs border-gray-300 hover:bg-gray-50"
                 disabled={isSubmitting}
               >
-                {showAdvanced ? 'Hide' : 'Show'} Advanced
+                {showAdvanced ? "Hide" : "Show"} Advanced
               </Button>
             </div>
-            
+
             {showAdvanced && (
               <div className="border border-gray-300 p-6 space-y-4 bg-orange-50">
                 <p className="font-mono text-xs text-orange-600 mb-4">
-                  Override default settings for this task only. Leave empty to use system defaults.
+                  Override default settings for this task only. Leave empty to
+                  use system defaults.
                 </p>
-                
+
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <div className="space-y-2">
                     <Label className="font-mono text-xs text-black">
@@ -403,7 +419,7 @@ export default function NewTaskPage() {
                       disabled={isSubmitting}
                     />
                   </div>
-                  
+
                   <div className="space-y-2">
                     <Label className="font-mono text-xs text-black">
                       Specialist Max Iterations
@@ -414,12 +430,14 @@ export default function NewTaskPage() {
                       max="8"
                       value={specialistMaxIters}
                       onChange={(e) => setSpecialistMaxIters(e.target.value)}
-                      placeholder={settings?.specialist_max_iters.toString() || "4"}
+                      placeholder={
+                        settings?.specialist_max_iters.toString() || "4"
+                      }
                       className="font-mono text-xs border-gray-300 focus:border-orange-400"
                       disabled={isSubmitting}
                     />
                   </div>
-                  
+
                   <div className="space-y-2">
                     <Label className="font-mono text-xs text-black">
                       Professor Max Iterations
@@ -430,17 +448,28 @@ export default function NewTaskPage() {
                       max="10"
                       value={professorMaxIters}
                       onChange={(e) => setProfessorMaxIters(e.target.value)}
-                      placeholder={settings?.professor_max_iters.toString() || "3"}
+                      placeholder={
+                        settings?.professor_max_iters.toString() || "3"
+                      }
                       className="font-mono text-xs border-gray-300 focus:border-orange-400"
                       disabled={isSubmitting}
                     />
                   </div>
                 </div>
-                
+
                 <div className="font-mono text-xs text-gray-600 space-y-1">
-                  <p>• <strong>Basic Mode</strong> uses only "Basic Max Iterations"</p>
-                  <p>• <strong>Enhanced Mode</strong> uses both "Specialist" and "Professor" iterations</p>
-                  <p>• Higher iterations = more thorough analysis but longer processing time</p>
+                  <p>
+                    • <strong>Basic Mode</strong> uses only "Basic Max
+                    Iterations"
+                  </p>
+                  <p>
+                    • <strong>Enhanced Mode</strong> uses both "Specialist" and
+                    "Professor" iterations
+                  </p>
+                  <p>
+                    • Higher iterations = more thorough analysis but longer
+                    processing time
+                  </p>
                 </div>
               </div>
             )}
