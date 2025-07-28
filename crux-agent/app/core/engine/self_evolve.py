@@ -86,72 +86,184 @@ class SelfEvolve:
         Raises:
             asyncio.CancelledError: If cancellation was requested
         """
-        logger.info(f"Starting Self-Evolve for: {problem.question[:100]}...")
+        return await self._solve_internal(problem, start_iteration=1, evolution_history=[])
+
+    async def resume_solve(self, problem: Problem, evolution_history: list, start_iteration: int) -> Solution:
+        """
+        Resume solving a problem from a previous state.
         
+        Args:
+            problem: Problem to solve
+            evolution_history: Previous evolution history
+            start_iteration: Iteration to start from
+            
+        Returns:
+            Solution with final answer and metadata
+            
+        Raises:
+            asyncio.CancelledError: If cancellation was requested
+        """
+        return await self._solve_internal(problem, start_iteration, evolution_history)
+
+    async def _solve_internal(self, problem: Problem, start_iteration: int = 1, evolution_history: list = None) -> Solution:
+        """
+        Internal method to solve a problem using the Self-Evolve algorithm with an option to resume.
+        
+        Args:
+            problem: Problem to solve
+            start_iteration: Iteration to start from
+            evolution_history: Existing evolution history
+            
+        Returns:
+            Solution with final answer and metadata
+            
+        Raises:
+            asyncio.CancelledError: If cancellation was requested
+        """
+        if evolution_history is None:
+            evolution_history = []
+            
+        logger.info(f"Starting Self-Evolve from iteration {start_iteration} for: {problem.question[:100]}...")
+
         # Reset cancellation flag
         self._cancelled = False
-        
+
         # Initialize tracking variables
-        prompt = self._create_initial_prompt(problem)
-        evolution_history = []
+        if evolution_history and "refined_prompt" in evolution_history[-1]:
+            prompt = evolution_history[-1]["refined_prompt"]
+        else:
+            prompt = self._create_initial_prompt(problem)
+            
+        # Initialize additional tracking variables
+        best_iteration = None        # Dict from evolution_history
+        best_output = ""
+        fallback_triggered = False
+
+        # Calculate tokens from previous iterations
         total_tokens = 0
-        current_output = ""
+        for item in evolution_history:
+            if "metadata" in item:
+                gen_tokens = item["metadata"].get("generator", {}).get("tokens_used", 0)
+                eval_tokens = item["metadata"].get("evaluator", {}).get("tokens_used", 0)
+                refiner_tokens = item["metadata"].get("refiner", {}).get("tokens_used", 0)
+                total_tokens += gen_tokens + eval_tokens + refiner_tokens
+                
+        current_output = evolution_history[-1]["output"] if evolution_history else ""
         should_stop = False
-        
-        for iteration in range(1, self.max_iters + 1):
+
+        iteration = start_iteration
+        while iteration <= self.max_iters:
             # Check for cancellation
             if self._cancelled:
                 logger.info(f"Self-Evolve cancelled at iteration {iteration}")
                 raise asyncio.CancelledError("Self-Evolve was cancelled")
-            
+
             logger.info(f"Self-Evolve iteration {iteration}/{self.max_iters}")
-            
+
             # Update progress if callback provided
             if self.progress_callback:
                 self.progress_callback(iteration, self.max_iters, f"Self-Evolve iteration {iteration}/{self.max_iters}")
-            
-            # Step 1: Generate answer
+
+            # Step 1: Generate answer with validation
             gen_context = AgentContext(
                 prompt=prompt,
                 additional_context={
                     "constraints": problem.constraints,
                     "context": problem.context,
-                }
+                },
             )
-            gen_result = await self.generator.run(gen_context)
-            output = gen_result.output
+            
+            # Try generation with retries for invalid outputs
+            gen_result = None
+            output = None
+            retry_count = 0
+            max_retries_per_iteration = 4  # Increase retries from 2 to 4
+            generation_successful = False
+            
+            while retry_count <= max_retries_per_iteration:
+                try:
+                    gen_result = await self.generator.run(gen_context)
+                    output = gen_result.output
+                    
+                    # Validate the generated output
+                    if self._is_valid_output(output):
+                        generation_successful = True
+                        break  # Valid output, proceed
+                    else:
+                        logger.warning(f"Invalid output detected in iteration {iteration}, retry {retry_count + 1}: {repr(output[:100])}")
+                        retry_count += 1
+                        if retry_count <= max_retries_per_iteration:
+                            continue
+                        else:
+                            # TODO: New control-flow injection point - consider alternative handling when max retries are reached
+                            logger.error(f"Max retries reached for iteration {iteration} with invalid output")
+                            break
+                            
+                except Exception as e:
+                    logger.error(f"Generation failed in iteration {iteration}, retry {retry_count + 1}: {e}")
+                    retry_count += 1
+                    if retry_count <= max_retries_per_iteration:
+                        continue
+                    else:
+                        # Create a fallback result with error message
+                        gen_result = type('GenResult', (), {
+                            'output': f"Generation failed after {max_retries_per_iteration + 1} attempts: {str(e)}",
+                            'metadata': {'error': str(e), 'fallback': True},
+                            'tokens_used': 0
+                        })()
+                        output = gen_result.output
+                        break
+            
+            # If we never got a valid output, skip this iteration entirely
+            if not generation_successful:
+                logger.error(f"Skipping iteration {iteration} due to persistent invalid output after {max_retries_per_iteration + 1} attempts")
+                if best_iteration is not None:
+                    fallback_triggered = True
+                    break  # Exit the main while loop
+                else:
+                    raise Exception("No valid iteration found; marking task as failed.")
 
             # Extract reasoning summary from generator
             generator_reasoning_summary = gen_result.metadata.get("reasoning_summary", "")
             current_output = output
-            
+
             # Track tokens
             if gen_result.tokens_used:
                 total_tokens += gen_result.tokens_used
-            
+
             # Check for cancellation after generation
             if self._cancelled:
                 logger.info(f"Self-Evolve cancelled after generation in iteration {iteration}")
                 raise asyncio.CancelledError("Self-Evolve was cancelled")
-            
+
             # Step 2: Evaluate answer
-            # For professor, skip evaluation in the final iteration
+            # For professor, skip evaluation in the final iteration (but only if we've had multiple iterations)
             eval_result = None
             should_stop = False
-            if self.generator.role == "professor" and iteration == self.max_iters:
+            if self.generator.role == "professor" and iteration == self.max_iters and iteration > 1:
                 logger.info("Skipping final evaluation for professor.")
                 should_stop = True
             else:
-                eval_context = AgentContext(
-                    prompt=problem.question,  # Original question for evaluation
-                    output=output,
-                    additional_context={
-                        "constraints": problem.constraints,
-                        "context": problem.context,
-                        "generator_reasoning_summary": generator_reasoning_summary,
-                    }
-                )
-                eval_result = await self.evaluator.run(eval_context)
+                # Double-check output validity before evaluation (defense in depth)
+                if not self._is_valid_output(output):
+                    logger.warning(f"Skipping evaluation for invalid output in iteration {iteration}")
+                    # Create a mock evaluation result that won't trigger stop
+                    eval_result = type('EvalResult', (), {
+                        'feedback': 'Evaluation skipped due to invalid generator output',
+                        'metadata': {'should_stop': False, 'status': 'skipped_invalid_output'},
+                        'tokens_used': 0
+                    })()
+                else:
+                    eval_context = AgentContext(
+                        prompt=problem.question,  # Original question for evaluation
+                        output=output,
+                        additional_context={
+                            "constraints": problem.constraints,
+                            "context": problem.context,
+                            "generator_reasoning_summary": generator_reasoning_summary,
+                        },
+                    )
+                    eval_result = await self.evaluator.run(eval_context)
 
                 # Extract evaluator reasoning summary
                 evaluator_reasoning_summary = eval_result.metadata.get("reasoning_summary", "")
@@ -162,7 +274,7 @@ class SelfEvolve:
 
                 # Check for <stop> token
                 should_stop = eval_result.metadata.get("should_stop", False)
-                
+
                 # Check for cancellation after evaluation
                 if self._cancelled:
                     logger.info(f"Self-Evolve cancelled after evaluation in iteration {iteration}")
@@ -182,13 +294,19 @@ class SelfEvolve:
             }
             evolution_history.append(iteration_data)
 
+            # Update additional tracking variables after successful generation
+            best_iteration = iteration_data
+            best_output = output
+            fallback_triggered = 'fallback' in gen_result.metadata
+
             logger.info(f"Iteration {iteration} complete. Should stop: {should_stop}")
-            
+
             # Check exit conditions
             if should_stop:
-                logger.info("Evaluator issued <stop> token. Solution is complete.")
+                logger.info(f"Evaluator issued <stop> token after iteration {iteration}. Solution is complete.")
+                logger.info(f"Final evaluation feedback: {eval_result.feedback[:200] if eval_result else 'No evaluation'}...")
                 break
-            
+
             # Step 3: Refine prompt for next iteration (if not last iteration)
             if iteration < self.max_iters:
                 # Ensure we have an evaluation result before refining
@@ -215,38 +333,57 @@ class SelfEvolve:
                     # Add refinement data to iteration
                     iteration_data["refined_prompt"] = prompt
                     iteration_data["metadata"]["refiner"] = refine_result.metadata
-                    
+
                     # Check for cancellation after refinement
                     if self._cancelled:
                         logger.info(f"Self-Evolve cancelled after refinement in iteration {iteration}")
                         raise asyncio.CancelledError("Self-Evolve was cancelled")
                 else:
                     logger.info("Skipping refinement due to skipped evaluation.")
-        
+            
+            # Increment iteration counter only after successful completion
+            iteration += 1
+
         # Final cancellation check
         if self._cancelled:
             logger.info("Self-Evolve cancelled before creating final solution")
             raise asyncio.CancelledError("Self-Evolve was cancelled")
+
+        # Calculate actual completed iterations from evolution history
+        completed_iterations = len(evolution_history)
+        final_iteration = iteration - 1  # iteration is incremented after completion
+        
+        # Determine final iteration and stop reason based on fallback status
+        if fallback_triggered:
+            final_iter = best_iteration
+            stop_reason = "fallback_to_best"
+        else:
+            final_iter = evolution_history[-1]
+            stop_reason = "evaluator_stop" if should_stop else "max_iterations"
         
         # Create final solution
         solution = Solution(
-            output=current_output,
-            iterations=iteration,
+            output=final_iter["output"],
+            iterations=completed_iterations,
             evolution_history=evolution_history,
             total_tokens=total_tokens,
             metadata={
                 "problem": problem.dict(),
                 "converged": should_stop,
-                "final_iteration": iteration,
-                "stop_reason": "evaluator_stop" if should_stop else "max_iterations",
+                "final_iteration": final_iteration,
+                "stop_reason": stop_reason,
             },
         )
         
+        # Add fallback metadata
+        solution.metadata["stop_reason"] = stop_reason
+        solution.metadata["fallback_used"] = fallback_triggered
+
         logger.info(
             f"Self-Evolve complete. Converged: {should_stop}, "
-            f"Iterations: {iteration}, Tokens: {total_tokens}"
+            f"Iterations: {completed_iterations}, Tokens: {total_tokens}"
         )
-        
+
         return solution
 
     def _create_initial_prompt(self, problem: Problem) -> str:
@@ -269,6 +406,52 @@ class SelfEvolve:
         
         return "\n".join(prompt_parts)
     
+    def _is_valid_output(self, output: str) -> bool:
+        """
+        Validate if an output is worth counting as a real iteration.
+        
+        Args:
+            output: Generated output to validate
+            
+        Returns:
+            True if output is valid, False otherwise
+        """
+        if not output:
+            return False
+            
+        output_stripped = output.strip()
+        
+        # Check for completely empty output
+        if not output_stripped:
+            return False
+            
+        # Check for placeholder outputs
+        if output_stripped in ["...", "…", "[content continues]", "[generating...]"]:
+            return False
+            
+        # Check for error messages
+        error_patterns = [
+            "i apologize, but i encountered an error",
+            "i'm sorry, but an error occurred",
+            "unable to generate",
+            "generation failed",
+            "error generating",
+            "cannot process",
+            "failed to process",
+        ]
+        
+        output_lower = output_stripped.lower()
+        for pattern in error_patterns:
+            if pattern in output_lower:
+                return False
+                
+        # Check for outputs that are too short to be meaningful (less than 10 words)
+        word_count = len(output_stripped.split())
+        if word_count < 10:
+            return False
+            
+        return True
+    
     def get_config(self) -> Dict[str, Any]:
         """Get engine configuration."""
         return {
@@ -276,4 +459,4 @@ class SelfEvolve:
             "generator": self.generator.role,
             "evaluator": self.evaluator.role,
             "refiner": self.refiner.role,
-        } 
+        }

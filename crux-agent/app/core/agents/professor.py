@@ -129,8 +129,10 @@ Begin your analysis and make specialist consultations as needed.
             
             # Process function calls if any
             if hasattr(response, 'function_calls') and response.function_calls:
-                for func_call in response.function_calls:
+                logger.info(f"Professor making {len(response.function_calls)} specialist consultations")
+                for i, func_call in enumerate(response.function_calls, 1):
                     if func_call.name == "consult_graduate_specialist":
+                        logger.info(f"Specialist consultation {i}: {func_call.arguments.get('specialization', 'unknown')}")
                         specialist_result = await self._execute_specialist_consultation(
                             func_call.arguments,
                             context.prompt,
@@ -342,7 +344,6 @@ The professor has determined that this specific task requires your expertise in 
                 total_iterations=total_iterations,
                 final_evaluation=final_evaluation,
                 reasoning_section=reasoning_section,
-                metadata=specialist_solution.metadata,
             )
             
             # Create result with both formatted and raw data
