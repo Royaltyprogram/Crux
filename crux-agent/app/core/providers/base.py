@@ -48,7 +48,7 @@ class BaseProvider(ABC):
         self,
         api_key: str,
         model: str,
-        timeout: int = 60,
+        timeout: Optional[int] = 60,
         max_retries: int = 3,
     ):
         """
@@ -57,7 +57,7 @@ class BaseProvider(ABC):
         Args:
             api_key: API key for authentication
             model: Model name to use
-            timeout: Request timeout in seconds
+            timeout: Request timeout in seconds (None for unlimited)
             max_retries: Maximum number of retry attempts
         """
         self.api_key = api_key
@@ -80,7 +80,9 @@ class BaseProvider(ABC):
     async def _ensure_client(self) -> None:
         """Ensure HTTP client is initialized."""
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self.timeout)
+            # Use unlimited timeout if timeout is None, otherwise use the specified timeout
+            timeout_config = None if self.timeout is None else self.timeout
+            self._client = httpx.AsyncClient(timeout=timeout_config)
     
     async def close(self) -> None:
         """Close HTTP client."""

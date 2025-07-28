@@ -2,7 +2,7 @@
 OpenAI provider implementation.
 """
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, AsyncIterator
 
 from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionMessageParam
@@ -28,7 +28,7 @@ class OpenAIProvider(BaseProvider):
         self,
         api_key: str,
         model: str = "gpt-4o-mini",
-        timeout: int = 60,
+        timeout: Optional[int] = None,
         max_retries: int = 3,
     ):
         """
@@ -37,17 +37,21 @@ class OpenAIProvider(BaseProvider):
         Args:
             api_key: OpenAI API key
             model: Model name (default: gpt-4o-mini)
-            timeout: Request timeout in seconds
+            timeout: Request timeout in seconds (None for unlimited)
             max_retries: Maximum retry attempts
         """
-        super().__init__(api_key, model, timeout, max_retries)
+        super().__init__(api_key, model, timeout or 10800, max_retries)  # 3 hours fallback
+        # Set unlimited timeout for OpenAI SDK if timeout is None
+        sdk_timeout = None if timeout is None else timeout
         self.client = AsyncOpenAI(
             api_key=api_key,
-            timeout=timeout,
+            timeout=sdk_timeout,
             max_retries=max_retries,
         )
         # Response API conversation continuation (o-series only)
         self.current_response_id: Optional[str] = None
+        # Store accumulated reasoning summary parts for streaming
+        self._reasoning_parts: List[str] = []
     
     def _with_json_retry(self, fn, *args, **kwargs):
         """
@@ -148,6 +152,88 @@ class OpenAIProvider(BaseProvider):
 
         return await retry_func()
     
+    async def _process_streaming_response(
+        self,
+        stream_response: AsyncIterator[Any],
+        collect_reasoning: bool = True,
+    ) -> tuple[str, Optional[str]]:
+        """
+        Process streaming response from OpenAI Responses API.
+        
+        Args:
+            stream_response: Async iterator of streaming events
+            collect_reasoning: Whether to collect reasoning summary
+            
+        Returns:
+            Tuple of (content, response_id)
+        """
+        content = ""
+        response_id = None
+        reasoning_summary_parts = []
+        function_calls = []
+        
+        async for event in stream_response:
+            event_type = event.type
+            
+            if event_type == "response.created":
+                response_obj = event.response
+                response_id = response_obj.id
+                logger.debug(f"Response created with ID: {response_id}")
+                
+            elif event_type == "response.output_text.delta":
+                # According to API docs, delta is a direct string
+                delta_content = event.delta
+                content += delta_content
+                
+            elif event_type == "response.output_text.done":
+                # Final text output completed
+                logger.debug("Output text streaming completed")
+                
+            elif event_type == "response.reasoning_summary_text.delta" and collect_reasoning:
+                # According to API docs, delta is a direct string
+                delta_reasoning = event.delta
+                reasoning_summary_parts.append(delta_reasoning)
+                
+            elif event_type == "response.reasoning_summary_text.done" and collect_reasoning:
+                # Reasoning summary completed
+                logger.debug("Reasoning summary streaming completed")
+                
+            elif event_type == "response.function_call_arguments.delta":
+                # Handle function call streaming - delta contains arguments string
+                # Skip as per user request
+                pass
+                
+            elif event_type == "response.completed":
+                response_obj = event.response
+                response_id = response_obj.id
+                
+                # Extract final content if not already streamed
+                if not content:
+                    output_items = response_obj.output
+                    for item in output_items:
+                        if item.type == 'message':
+                            for content_item in item.content:
+                                if content_item.type == 'output_text':
+                                    content += content_item.text
+                
+                logger.debug(f"Response completed, total content length: {len(content)}")
+                
+            elif event_type == "response.failed":
+                error_obj = event.response.error
+                error_msg = error_obj.message
+                raise ProviderError(f"Response failed: {error_msg}")
+                
+            elif event_type == "error":
+                error_msg = event.message
+                raise ProviderError(f"Stream error: {error_msg}")
+        
+        # Store reasoning summary if collected
+        if collect_reasoning and reasoning_summary_parts:
+            self.last_reasoning_summary = "".join(reasoning_summary_parts)
+            logger.debug(f"Collected reasoning summary: {len(self.last_reasoning_summary)} chars")
+        
+        return content, response_id
+    
     async def complete(
         self,
         *,
@@ -155,7 +241,7 @@ class OpenAIProvider(BaseProvider):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         system_prompt: Optional[str] = None,
-        stream: bool = False,
+        stream: bool = True,
         truncation: Optional[str] = "auto",
         **kwargs: Any,
     ) -> str:
@@ -181,14 +267,21 @@ class OpenAIProvider(BaseProvider):
             
             # Use responses API for o-series models (o1, o3, etc.)
             if self.model.lower().startswith('o'):
-                if stream:
-                    logger.warning("Streaming not supported for o-series models, falling back to non-streaming")
+                # Note: We'll try streaming for o-series models to avoid timeouts
+                logger.debug("Using responses API for o-series model with streaming attempt")
                 
                 params: Dict[str, Any] = {
                     "model": self.model,
                     "instructions": system_prompt or "",
                     "input": prompt,
+                    "stream": True,  # Try streaming for o-series models to avoid timeouts
                 }
+                
+                # Add tools if provided in kwargs
+                tools = kwargs.pop("tools", None)
+                if tools:
+                    params["tools"] = tools
+                    logger.debug(f"Added {len(tools)} tools to streaming response API call")
                 
                 # Add reasoning parameters for o-series models
                 reasoning_effort = kwargs.pop("reasoning_effort", "high")  # 기본값 설정하고 kwargs에서 제거
@@ -202,15 +295,17 @@ class OpenAIProvider(BaseProvider):
                 params["reasoning"] = reasoning_dict
                 logger.debug(f"Added reasoning parameters: {reasoning_dict}")
                 
-                response = await self.client.responses.create(**params)
+                # Create streaming response
+                stream_response = await self.client.responses.create(**params)
+                
+                # Process streaming events
+                content, response_id = await self._process_streaming_response(
+                    stream_response,
+                    collect_reasoning=bool(reasoning_summary)
+                )
                 
                 # Store response ID for Response API continuation (o-series only)
-                self.current_response_id = getattr(response, "id", None)
-                
-                content = getattr(response, "output_text", "")
-                
-                # Extract and store reasoning summary
-                self._extract_and_store_reasoning_summary(response)
+                self.current_response_id = response_id
                 
                 if not content:
                     raise ProviderError("Empty response from OpenAI responses API")
@@ -244,7 +339,8 @@ class OpenAIProvider(BaseProvider):
             if stream:
                 # Handle streaming response
                 content = ""
-                async for chunk in await self.client.chat.completions.create(**params):
+                stream_response = await self.client.chat.completions.create(**params)
+                async for chunk in stream_response:
                     if chunk.choices and chunk.choices[0].delta.content:
                         content += chunk.choices[0].delta.content
                 
@@ -695,15 +791,17 @@ class OpenAIProvider(BaseProvider):
                 }
                 params["reasoning"] = reasoning_dict
 
-                response = await self.client.responses.create(**params)
+                # Create streaming response for continuation
+                stream_response = await self.client.responses.create(**params)
+                
+                # Process streaming events
+                content, response_id = await self._process_streaming_response(
+                    stream_response,
+                    collect_reasoning=bool(reasoning_summary)
+                )
                 
                 # Update response ID for further continuation
-                self.current_response_id = getattr(response, "id", None)
-                
-                content = getattr(response, "output_text", "")
-                
-                # Extract and store reasoning summary
-                self._extract_and_store_reasoning_summary(response)
+                self.current_response_id = response_id
                 
                 if not content:
                     raise ProviderError("Empty response from OpenAI conversation continuation")
@@ -762,15 +860,17 @@ class OpenAIProvider(BaseProvider):
             }
             params["reasoning"] = reasoning_dict
 
-            response = await self.client.responses.create(**params)
+            # Create streaming response for function continuation
+            stream_response = await self.client.responses.create(**params)
+            
+            # Process streaming events
+            content, response_id = await self._process_streaming_response(
+                stream_response,
+                collect_reasoning=bool(reasoning_summary)
+            )
             
             # Update response ID for further continuation
-            self.current_response_id = getattr(response, "id", None)
-            
-            content = getattr(response, "output_text", "")
-            
-            # Extract and store reasoning summary
-            self._extract_and_store_reasoning_summary(response)
+            self.current_response_id = response_id
             
             if not content:
                 raise ProviderError("Empty response from function calling continuation")

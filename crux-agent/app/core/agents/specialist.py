@@ -96,15 +96,33 @@ class SpecialistAgent(AbstractAgent):
         """
         logger.info(f"Specialist ({self.domain}) processing task: {context.prompt[:100]}...")
         
-        # Check if there's additional context from professor
+        # Extract comprehensive context information (following self-evolve pattern)
         task_info = context.additional_context.get("task_info", {})
-        context_str = context.additional_context.get("context")
+        context_str = context.additional_context.get("context", "")
         
-        # Build specialist prompt using the prompts module
+        # Enhanced context extraction from professor
+        professor_reasoning = context.additional_context.get("professor_reasoning_context", "")
+        problem_constraints = context.additional_context.get("problem_constraints", "")
+        original_problem = context.additional_context.get("original_problem", context.prompt)
+        
+        # Build comprehensive professor reasoning context (self-evolve pattern)
+        enhanced_professor_context = ""
+        if professor_reasoning or problem_constraints or original_problem != context.prompt:
+            enhanced_professor_context = f"""
+PROFESSOR'S REASONING CONTEXT:
+Original Problem: {original_problem}
+Specialist Context: {context_str}
+Task Constraints: {problem_constraints}
+Professor's Analysis: {professor_reasoning}
+
+The professor has determined that this specific task requires your expertise in {self.domain}.
+"""
+        
+        # Build specialist prompt using enhanced context
         specialist_prompt = build_specialist_prompt(
             specialization=self.domain,
             prompt=context.prompt,
-            context=context_str
+            context=enhanced_professor_context if enhanced_professor_context else context_str
         )
         
         try:
@@ -120,14 +138,22 @@ class SpecialistAgent(AbstractAgent):
             
             logger.info(f"Specialist ({self.domain}) completed task, tokens: {tokens}")
             
+            # Enhanced metadata including comprehensive context (self-evolve pattern)
+            enhanced_metadata = {
+                "domain": self.domain,
+                "task": context.prompt,
+                "task_info": task_info,
+                "reasoning_summary": self.provider.get_last_reasoning_summary() if hasattr(self.provider, "get_last_reasoning_summary") else "",
+                "original_problem": original_problem,
+                "professor_reasoning_context": professor_reasoning,
+                "problem_constraints": problem_constraints,
+                "context_str": context_str,
+                "enhanced_context_used": bool(enhanced_professor_context),
+            }
+            
             return AgentResult(
                 output=response_text,
-                metadata={
-                    "domain": self.domain,
-                    "task": context.prompt,
-                    "task_info": task_info,
-                    "reasoning_summary": self.provider.get_last_reasoning_summary() if hasattr(self.provider, "get_last_reasoning_summary") else "",
-                },
+                metadata=enhanced_metadata,
                 tokens_used=tokens,
             )
             

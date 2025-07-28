@@ -72,17 +72,15 @@ export interface SettingsResponse {
 }
 
 // API Configuration
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const API_VERSION = '/api/v1';
 
 // API Client
 class ApiClient {
   private baseURL: string;
-  private apiKey: string;
 
   constructor() {
     this.baseURL = `${API_BASE_URL}${API_VERSION}`;
-    this.apiKey = process.env.NEXT_PUBLIC_API_KEY || 'demo-api-key-12345';
   }
 
   private async request<T>(
@@ -94,7 +92,6 @@ class ApiClient {
     const config: RequestInit = {
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
         ...options.headers,
       },
       ...options,
