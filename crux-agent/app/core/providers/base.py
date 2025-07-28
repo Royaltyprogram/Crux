@@ -11,6 +11,7 @@ from tenacity import (
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
+    wait_random_exponential,
 )
 
 from app.utils.logging import get_logger
@@ -34,7 +35,14 @@ class TimeoutError(ProviderError):
 
 
 class BaseProvider(ABC):
-    """Abstract base class for LLM providers."""
+    """Abstract base class for LLM providers.
+    
+    Provides built-in retry functionality for resilient API communication:
+    - HTTP request retries for network issues (timeouts, server errors)
+    - Configurable max_retries parameter (default: 3 attempts)
+    - Exponential backoff with random jitter (1-5 seconds)
+    - Automatic rate limit handling
+    """
     
     def __init__(
         self,
@@ -80,10 +88,28 @@ class BaseProvider(ABC):
             await self._client.aclose()
             self._client = None
     
+    def _log_retry_attempt(self, retry_state):
+        """Log retry attempts for debugging transient API issues."""
+        if retry_state.outcome and retry_state.outcome.failed:
+            error = retry_state.outcome.exception()
+            attempt_num = retry_state.attempt_number
+            error_type = type(error).__name__
+            error_msg = str(error)
+            logger.warning(
+                f"HTTP request retry - method: _make_request, "
+                f"attempt: {attempt_num}/3, "
+                f"error_type: {error_type}, "
+                f"error: {error_msg}"
+            )
+            logger.debug(
+                f"Retrying HTTP request in {retry_state.next_action.sleep if retry_state.next_action else 0:.2f}s"
+            )
+
     @retry(
         retry=retry_if_exception_type((httpx.TimeoutException, httpx.HTTPStatusError)),
         stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
+        wait=wait_random_exponential(min=1, max=5),
+        before_sleep=lambda retry_state: BaseProvider._log_retry_attempt(None, retry_state),
     )
     async def _make_request(
         self,
@@ -94,6 +120,13 @@ class BaseProvider(ABC):
         """
         Make HTTP request with retry logic.
         
+        Automatically retries on the following errors:
+        - httpx.TimeoutException: Network timeouts
+        - httpx.HTTPStatusError: HTTP 4xx/5xx errors (except permanent failures)
+        
+        Uses exponential backoff with random jitter (1-5 seconds) between retries.
+        Maximum retry attempts controlled by self.max_retries (default: 3).
+        
         Args:
             method: HTTP method
             url: Request URL
@@ -103,8 +136,9 @@ class BaseProvider(ABC):
             HTTP response
             
         Raises:
-            TimeoutError: If request times out
-            ProviderError: For other HTTP errors
+            TimeoutError: If request times out after all retries
+            RateLimitError: If rate limit exceeded (HTTP 429)
+            ProviderError: For other HTTP errors after all retries
         """
         await self._ensure_client()
         

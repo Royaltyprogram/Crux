@@ -32,18 +32,22 @@ def create_provider(
     provider_name = provider_name or settings.llm_provider
     
     if provider_name == "openai":
+        if not api_key and not settings.openai_api_key:
+            raise ValueError("OpenAI API key not configured")
         return OpenAIProvider(
-            api_key=api_key or settings.get_llm_api_key(),
-            model=model or settings.get_model_name(),
+            api_key=api_key or settings.openai_api_key.get_secret_value(),
+            model=model or settings.model_openai,
             timeout=settings.openai_timeout,
             max_retries=settings.openai_max_retries,
         )
     elif provider_name == "openrouter":
+        if not api_key and not settings.openrouter_api_key:
+            raise ValueError("OpenRouter API key not configured")
         return OpenRouterProvider(
-            api_key=api_key or settings.get_llm_api_key(),
-            model=model or settings.get_model_name(),
-            timeout=settings.openai_timeout,  # Reuse OpenAI settings
-            max_retries=settings.openai_max_retries,
+            api_key=api_key or settings.openrouter_api_key.get_secret_value(),
+            model=model or settings.model_openrouter,
+            timeout=settings.openrouter_timeout,
+            max_retries=settings.openrouter_max_retries,
             app_name=settings.app_name,
         )
     else:
