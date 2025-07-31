@@ -5,6 +5,14 @@
 <p><em>The State-of-the-Art Intelligence</em></p>
 
 <img src="./assets/crux-github-banner.png" alt="Crux AI Banner" width="100%" style="border-radius: 15px; box-shadow: 0 8px 32px rgba(0,0,0,0.1);">
+<p align="center">
+  <a href="https://tooliense.com">
+    🌐 <strong>Website</strong>
+  </a> •
+  <a href="https://discord.gg/mP5YVp5gwK">
+    💬 <strong>Join Discord</strong>
+  </a>
+</p>
 
 ---
 
