@@ -185,31 +185,7 @@ class BaseProvider(ABC):
             Generated text completion
         """
         pass
-    
-    @abstractmethod
-    async def complete_json(
-        self,
-        *,
-        prompt: str,
-        temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
-        system_prompt: Optional[str] = None,
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        """
-        Generate JSON completion for the given prompt.
-        
-        Args:
-            prompt: User prompt
-            temperature: Sampling temperature (0-1)
-            max_tokens: Maximum tokens to generate
-            system_prompt: System prompt to prepend
-            **kwargs: Provider-specific parameters
-            
-        Returns:
-            Generated JSON object
-        """
-        pass
+
     
     def count_tokens(self, text: str) -> int:
         """
