@@ -1,6 +1,7 @@
 """
 Evaluator agent for quality assessment.
 """
+import re
 from typing import Any, Dict, List, Optional
 
 from app.core.agents.base import AbstractAgent, AgentContext, AgentResult
@@ -31,6 +32,37 @@ class EvaluatorAgent(AbstractAgent):
         )
 
         # No custom tools for the evaluator – we rely on the provider's built-in code interpreter
+
+    def _detect_stop_token(self, text):
+        # Count only a standalone token on its own line or surrounded by whitespace/punctuation
+        pattern = r"(?:^|\s)<stop>(?=\s|[.,!?;:]|$)"
+        
+        # First check if the pattern matches
+        if not re.search(pattern, text):
+            return False
+            
+        # Don't stop if there are errors mentioned
+        if "error" in text.lower():
+            return False
+            
+        # Don't stop if this appears to be instruction/guideline text
+        # Look for phrases that suggest this is explaining how to use the token
+        guideline_phrases = [
+            "remember to use",
+            "use the",
+            "token when",
+            "requires you to use",
+            "should use",
+            "need to use",
+            "supposed to use"
+        ]
+        
+        text_lower = text.lower()
+        for phrase in guideline_phrases:
+            if phrase in text_lower:
+                return False
+                
+        return True
 
     async def _generate_with_functions(
         self,
@@ -105,6 +137,9 @@ class EvaluatorAgent(AbstractAgent):
         )
         
         try:
+            # Log the raw evaluation prompt for debugging
+            logger.info(f"Raw evaluation_prompt: {evaluation_prompt}")
+            
             # Generate evaluation allowing code execution via function-calling API
             evaluation_result = await self._generate_with_functions(
                 prompt=evaluation_prompt,
@@ -112,6 +147,9 @@ class EvaluatorAgent(AbstractAgent):
                 temperature=self.temperature,
             )
             evaluation = evaluation_result.strip() if isinstance(evaluation_result, str) else str(evaluation_result).strip()
+            
+            # Log the raw model reply for debugging
+            logger.info(f"Raw model reply: {evaluation}")
 
             # Prevent invalid empty evaluations from wrongly triggering stoppage
             if not evaluation or evaluation == "Cannot evaluate: no answer provided":
@@ -131,7 +169,7 @@ class EvaluatorAgent(AbstractAgent):
             
             # Check for <stop> token to determine if iteration should stop
             # Be more conservative - don't stop if there are errors mentioned
-            should_stop = "<stop>" in evaluation and "error" not in evaluation.lower()
+            should_stop = self._detect_stop_token(evaluation)
             
             logger.info(f"Evaluation complete. Should stop: {should_stop}, tokens: {tokens_used}")
             
