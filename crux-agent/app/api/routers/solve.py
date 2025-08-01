@@ -305,11 +305,16 @@ async def continue_task(
             args=[new_job_id, original_request, evolution_history, additional_iterations],
             task_id=new_job_id,
         )
+    elif mode == "enhanced":
+        celery_app.send_task(
+            "app.worker.continue_enhanced_task",
+            args=[new_job_id, original_request, evolution_history, additional_iterations],
+            task_id=new_job_id,
+        )
     else:
-        # For now, only support basic mode continuation
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Task continuation is currently only supported for basic mode",
+            detail=f"Task continuation is not supported for mode: {mode}",
         )
     
     return AsyncJobResponse(
