@@ -2,6 +2,7 @@
 OpenAI provider implementation.
 """
 import json
+import os
 from typing import Any, Dict, List, Optional, AsyncIterator
 
 from openai import AsyncOpenAI, OpenAI
@@ -41,6 +42,9 @@ class OpenAIProvider(BaseProvider):
             max_retries: Maximum retry attempts
         """
         super().__init__(api_key, model, timeout or 10800, max_retries)  # 3 hours fallback
+        # Read SERVICE_TIER and REASONING_EFFORT from environment
+        self.service_tier = os.getenv('SERVICE_TIER')
+        self.default_reasoning_effort = os.getenv('REASONING_EFFORT', 'high')
         # Set unlimited timeout for OpenAI SDK if timeout is None
         sdk_timeout = None if timeout is None else timeout
         self.client = AsyncOpenAI(
@@ -274,6 +278,7 @@ class OpenAIProvider(BaseProvider):
                     "model": self.model,
                     "instructions": system_prompt or "",
                     "input": prompt,
+                    "service_tier": self.service_tier,
                     "stream": True,  # Try streaming for o-series models to avoid timeouts
                 }
                 
@@ -283,8 +288,28 @@ class OpenAIProvider(BaseProvider):
                     params["tools"] = tools
                     logger.debug(f"Added {len(tools)} tools to streaming response API call")
                 
+                # Always add code_interpreter tool for o-series models
+                if "tools" not in params:
+                    params["tools"] = []
+                
+                # Check if code_interpreter is already present
+                has_code_interpreter = any(
+                    tool.get("type") == "code_interpreter" 
+                    for tool in params["tools"]
+                )
+                
+                if not has_code_interpreter:
+                    params["tools"].append({
+                        "type": "code_interpreter",
+                        "container": {
+                            "type": "auto",
+                            "file_ids": []
+                        }
+                    })
+                    logger.debug("Added code_interpreter tool to o-series model request")
+                
                 # Add reasoning parameters for o-series models
-                reasoning_effort = kwargs.pop("reasoning_effort", "high")  # 기본값 설정하고 kwargs에서 제거
+                reasoning_effort = kwargs.pop("reasoning_effort", self.default_reasoning_effort)  # 기본값 설정하고 kwargs에서 제거
                 reasoning_summary = kwargs.pop("reasoning_summary", "detailed")  # 기본값 설정하고 kwargs에서 제거
                 
                 reasoning_dict: Dict[str, Any] = {
@@ -437,14 +462,21 @@ class OpenAIProvider(BaseProvider):
                     "strict": func.get("strict", False)
                 })
             
-            # Add code interpreter tool by default for o-series models
-            tools.append({
-                "type": "code_interpreter",
-                "container": {
-                    "type": "auto",
-                    "file_ids": []
-                }
-            })
+            # Check if code_interpreter is already present in function tools
+            has_code_interpreter = any(
+                tool.get("type") == "code_interpreter" 
+                for tool in tools
+            )
+            
+            # Add code interpreter tool by default for o-series models if not present
+            if not has_code_interpreter:
+                tools.append({
+                    "type": "code_interpreter",
+                    "container": {
+                        "type": "auto",
+                        "file_ids": []
+                    }
+                })
             
             # Initial parameters
             params: Dict[str, Any] = {
@@ -452,10 +484,11 @@ class OpenAIProvider(BaseProvider):
                 "instructions": system_prompt or "",
                 "input": prompt,
                 "tools": tools,
+                "service_tier": self.service_tier,
             }
             
             # Add reasoning parameters
-            reasoning_effort = kwargs.pop("reasoning_effort", "high")  # 기본값 설정하고 kwargs에서 제거
+            reasoning_effort = kwargs.pop("reasoning_effort", self.default_reasoning_effort)  # 기본값 설정하고 kwargs에서 제거
             reasoning_summary = kwargs.pop("reasoning_summary", "detailed")  # 기본값 설정하고 kwargs에서 제거
             
             reasoning_dict: Dict[str, Any] = {
@@ -653,78 +686,7 @@ class OpenAIProvider(BaseProvider):
         except Exception as e:
             logger.error(f"OpenAI function calling error: {e}")
             raise ProviderError(f"OpenAI function calling error: {str(e)}") from e
-    
-    async def complete_json(
-        self,
-        *,
-        prompt: str,
-        temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
-        system_prompt: Optional[str] = None,
-        truncation: Optional[str] = "auto",
-        **kwargs: Any,
-    ) -> Dict[str, Any]:
-        """
-        Generate JSON completion using OpenAI API.
         
-        Uses JSON mode to ensure valid JSON output with built-in retry resilience:
-        - Automatically retries on JSON parsing failures (json.JSONDecodeError)
-        - Retries on provider errors during completion
-        - Fetches fresh responses on each retry attempt for better success rate
-        - Maximum retry attempts controlled by max_retries parameter
-        - Uses exponential backoff with random jitter (1-5 seconds)
-        
-        Args:
-            prompt: User prompt
-            temperature: Sampling temperature
-            max_tokens: Maximum tokens to generate
-            system_prompt: System prompt
-            truncation: Truncation strategy ("auto" or "disabled")
-            **kwargs: Additional parameters
-            
-        Returns:
-            Parsed JSON object
-            
-        Raises:
-            json.JSONDecodeError: If JSON parsing fails after all retries
-            ProviderError: If API request fails after all retries
-        """
-        # Ensure system prompt includes JSON instruction
-        json_system_prompt = (
-            f"{system_prompt or ''}\n\n"
-            "You must respond with valid JSON only. Do not include any text outside the JSON object."
-        ).strip()
-        
-        # Use JSON mode if available (GPT-4 Turbo and newer)
-        if self.model in ["gpt-4-turbo-preview", "gpt-4o", "gpt-4o-mini"]:
-            kwargs["response_format"] = {"type": "json_object"}
-        
-        async def _complete_and_parse_json() -> Dict[str, Any]:
-            """
-            Fetch a fresh response and attempt JSON parsing.
-            This function will be retried if JSON parsing fails.
-            """
-            # Get a fresh response on each attempt
-            response = await self.complete(
-                prompt=prompt,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                system_prompt=json_system_prompt,
-                truncation=truncation,
-                **kwargs,
-            )
-            
-            # Parse the JSON response
-            return json.loads(response)
-        
-        try:
-            # Use the retry wrapper for both completion and JSON parsing
-            return await self._with_json_retry_async(_complete_and_parse_json)
-                
-        except Exception as e:
-            logger.error(f"JSON completion error: {e}")
-            raise
-    
     def count_tokens(self, text: str) -> int:
         """
         Count tokens using tiktoken for accurate estimation.
@@ -779,6 +741,7 @@ class OpenAIProvider(BaseProvider):
                     "model": self.model,
                     "input": follow_up,
                     "previous_response_id": self.current_response_id,
+                    "service_tier": self.service_tier,
                 }
 
                 # Add reasoning parameters for o-series models
@@ -848,6 +811,7 @@ class OpenAIProvider(BaseProvider):
                 "model": self.model,
                 "input": function_outputs,
                 "previous_response_id": self.current_response_id,
+                "service_tier": self.service_tier,
             }
 
             # Add reasoning parameters for o-series models
