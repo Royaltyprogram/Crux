@@ -27,10 +27,23 @@ class Settings(BaseSettings):
     llm_provider: str = Field(default="openai", env="LLM_PROVIDER", description="LLM provider to use")
     model_openai: str = Field(default="o4-mini", description="OpenAI model name")
     model_openrouter: str = Field(default="nous-hermes-3b", description="OpenRouter model name")
+    model_lmstudio: str = Field(default="phi-3-mini-4k-instruct", description="LMStudio model name")
     openai_models: str = Field(default="o4-mini,o3", env="OPENAI_MODELS", description="Available OpenAI models (comma-separated)")
     openrouter_models: str = Field(default="deepseek/deepseek-r1-0528:free,qwen/qwen3-235b-a22b-2507:free,x-ai/grok-4", env="OPENROUTER_MODELS", description="Available OpenRouter models (comma-separated)")
+    lmstudio_models: str = Field(default="phi-3-mini-4k-instruct,mistral-7b-instruct", env="LMSTUDIO_MODELS", description="Available LMStudio models (comma-separated)")
     openai_api_key: Optional[SecretStr] = Field(default=None, description="OpenAI API key")
     openrouter_api_key: Optional[SecretStr] = Field(default=None, description="OpenRouter API key")
+    lmstudio_api_key: Optional[SecretStr] = Field(default=None, description="LMStudio API key")
+    lmstudio_base_url: str = Field(default="http://localhost:1234", env="LMSTUDIO_BASE_URL", description="LMStudio server base URL")
+    
+    # Context Management - Provider Specific
+    lmstudio_context_limit: int = Field(default=32768, env="LMSTUDIO_CONTEXT_LIMIT", description="Maximum context tokens for LMStudio")
+    openai_context_limit: int = Field(default=200000, env="OPENAI_CONTEXT_LIMIT", description="Maximum context tokens for OpenAI")
+    openrouter_context_limit: int = Field(default=262144, env="OPENROUTER_CONTEXT_LIMIT", description="Maximum context tokens for OpenRouter")
+    
+    # Summarization settings (shared across providers)
+    summarization_threshold: float = Field(default=0.8, env="SUMMARIZATION_THRESHOLD", description="Context usage threshold to trigger summarization")
+    response_reserve: int = Field(default=1000, env="RESPONSE_RESERVE", description="Tokens reserved for response generation")
     
     # Redis & Celery
     redis_url: str = Field(default="redis://localhost:6379/0", description="Redis connection URL")
@@ -59,12 +72,18 @@ class Settings(BaseSettings):
     openai_timeout: Optional[int] = Field(default=None, description="Timeout for OpenAI API calls in seconds (None = unlimited, fallback to 3 hours)")
     openrouter_max_retries: int = Field(default=3, description="Maximum retries for OpenRouter API calls")
     openrouter_timeout: int = Field(default=900, description="Timeout for OpenRouter API calls in seconds (15 minutes)")
+    lmstudio_max_retries: int = Field(default=3, description="Maximum retries for LMStudio API calls")
+    lmstudio_timeout: int = Field(default=600, description="Timeout for LMStudio API calls in seconds (10 minutes)")
+    
+    # OpenAI Flex mode settings
+    service_tier: str = Field(default="free", description="OpenAI service tier (free/flex)")
+    reasoning_effort: str = Field(default="medium", description="OpenAI reasoning effort (low/medium/high)")
     
     @field_validator("llm_provider")
     @classmethod
     def validate_llm_provider(cls, v: str) -> str:
         """Validate LLM provider is supported."""
-        supported = ["openai", "openrouter"]
+        supported = ["openai", "openrouter", "lmstudio"]
         if v not in supported:
             raise ValueError(f"LLM provider must be one of {supported}")
         return v
@@ -88,6 +107,11 @@ class Settings(BaseSettings):
             if not self.openrouter_api_key:
                 raise ValueError("OpenRouter API key not configured")
             return self.openrouter_api_key.get_secret_value()
+        elif self.llm_provider == "lmstudio":
+            # LMStudio API key is optional for local instances
+            if self.lmstudio_api_key:
+                return self.lmstudio_api_key.get_secret_value()
+            return ""  # Empty string for local no-auth instances
         else:
             raise ValueError(f"Unknown LLM provider: {self.llm_provider}")
     
@@ -97,6 +121,8 @@ class Settings(BaseSettings):
             return self.model_openai
         elif self.llm_provider == "openrouter":
             return self.model_openrouter
+        elif self.llm_provider == "lmstudio":
+            return self.model_lmstudio
         else:
             raise ValueError(f"Unknown LLM provider: {self.llm_provider}")
     
@@ -107,6 +133,20 @@ class Settings(BaseSettings):
             return [model.strip() for model in self.openai_models.split(",")]
         elif provider == "openrouter":
             return [model.strip() for model in self.openrouter_models.split(",")]
+        elif provider == "lmstudio":
+            return [model.strip() for model in self.lmstudio_models.split(",")]
+        else:
+            raise ValueError(f"Unknown LLM provider: {provider}")
+    
+    def get_context_limit(self, provider: str = None) -> int:
+        """Get the context limit for the specified provider."""
+        provider = provider or self.llm_provider
+        if provider == "openai":
+            return self.openai_context_limit
+        elif provider == "openrouter":
+            return self.openrouter_context_limit
+        elif provider == "lmstudio":
+            return self.lmstudio_context_limit
         else:
             raise ValueError(f"Unknown LLM provider: {provider}")
 

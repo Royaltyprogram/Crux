@@ -2,6 +2,8 @@
 Self-Evolve engine for iterative improvement.
 """
 import asyncio
+import json
+from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 from pydantic import BaseModel, Field
@@ -45,6 +47,8 @@ class SelfEvolve:
         max_iters: int = 3,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
         allow_continuation_fallback: bool = True,
+        job_id: Optional[str] = None,
+        redis_client=None,
     ):
         """
         Initialize Self-Evolve engine.
@@ -56,6 +60,8 @@ class SelfEvolve:
             max_iters: Maximum number of iterations
             progress_callback: Optional callback for progress updates (current_iter, max_iters, phase)
             allow_continuation_fallback: When True (default), allows fallback to best valid iteration when continuation fails
+            job_id: Optional job ID for partial results saving
+            redis_client: Optional Redis client for partial results saving
         """
         self.generator = generator
         self.evaluator = evaluator
@@ -65,7 +71,13 @@ class SelfEvolve:
         self.allow_continuation_fallback = allow_continuation_fallback
         self._cancelled = False  # Add cancellation flag
         
+        # Partial results functionality
+        self.job_id = job_id
+        self.redis_client = redis_client
+        
         logger.info(f"SelfEvolve initialized with max_iters={max_iters}, allow_continuation_fallback={allow_continuation_fallback}")
+        if job_id:
+            logger.info(f"Partial results saving enabled for job_id: {job_id}")
     
     def cancel(self):
         """Cancel the current solve operation."""
@@ -314,6 +326,17 @@ class SelfEvolve:
                 },
             }
             evolution_history.append(iteration_data)
+
+            # Save partial results to Redis if applicable
+            if self.job_id and self.redis_client:
+                partial_result = {
+                    "iterations": len(evolution_history),
+                    "latest_iteration": iteration_data,
+                    "evolution_history": evolution_history,
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+                self.redis_client.hset(f"job:{self.job_id}", "partial_results", json.dumps(partial_result))
+                logger.info(f"[Partial Results - {self.job_id}] Saved iteration {iteration}")
 
             # Update additional tracking variables after successful generation
             best_iteration = iteration_data

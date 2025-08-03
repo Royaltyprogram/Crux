@@ -49,9 +49,12 @@ export interface JobResponse {
   progress: number;
   current_phase: string;
   model_name?: string;
+  provider_name?: string;
   result?: TaskResult;
   error?: string;
   partial_results?: any;
+  metadata?: Record<string, any>;
+  job_params?: Record<string, any>;
 }
 
 export interface GetJobOptions {
@@ -69,6 +72,29 @@ export interface SettingsResponse {
   available_providers: string[];
   openai_models: string[];
   openrouter_models: string[];
+  lmstudio_models: string[];
+}
+
+export interface ContextLimitsResponse {
+  providers: {
+    openai: {
+      context_limit: number;
+      models: Record<string, number>;
+    };
+    openrouter: {
+      context_limit: number;
+      models: Record<string, number>;
+    };
+    lmstudio: {
+      context_limit: number;
+      models: Record<string, number>;
+    };
+  };
+  management: {
+    summarization_threshold: number;
+    response_reserve: number;
+  };
+  fallback_limit?: number;
 }
 
 // API Configuration
@@ -144,6 +170,20 @@ class ApiClient {
     });
   }
 
+  async listJobs(statusFilter?: string, limit: number = 50): Promise<JobResponse[]> {
+    const params = new URLSearchParams();
+    
+    if (statusFilter) {
+      params.append('status_filter', statusFilter);
+    }
+    params.append('limit', limit.toString());
+
+    const queryString = params.toString();
+    const endpoint = `/jobs${queryString ? `?${queryString}` : ''}`;
+    
+    return this.request<JobResponse[]>(endpoint);
+  }
+
   async getJob(jobId: string, options: GetJobOptions = {}): Promise<JobResponse> {
     const params = new URLSearchParams();
     
@@ -184,6 +224,10 @@ class ApiClient {
   async getSettings(): Promise<SettingsResponse> {
     return this.request<SettingsResponse>('/settings');
   }
+
+  async getContextLimits(): Promise<ContextLimitsResponse> {
+    return this.request<ContextLimitsResponse>('/jobs/config/context-limits');
+  }
 }
 
 // Export singleton instance
@@ -223,4 +267,98 @@ export function formatDuration(seconds: number): string {
  */
 export function formatTokens(tokens: number): string {
   return tokens.toLocaleString();
+}
+
+/**
+ * Get context limit for a specific model and provider
+ * @param modelName - Model name
+ * @param providerName - Provider name (openai, openrouter, lmstudio)
+ * @param contextLimits - Context limits configuration from API
+ * @returns Context limit in tokens or fallback value
+ */
+export function getModelContextLimit(
+  modelName: string | undefined,
+  providerName: string | undefined,
+  contextLimits: ContextLimitsResponse | null
+): number {
+  if (!contextLimits) {
+    return 50000; // Fallback for unknown models
+  }
+
+  // If we have the provider name, use it directly
+  if (providerName && contextLimits.providers[providerName as keyof typeof contextLimits.providers]) {
+    const provider = contextLimits.providers[providerName as keyof typeof contextLimits.providers];
+    
+    // Check if there's a specific model limit
+    if (modelName && provider.models[modelName]) {
+      return provider.models[modelName];
+    }
+    
+    // Fall back to provider's default context limit
+    return provider.context_limit;
+  }
+
+  // Fallback: If no provider name, try to guess from model name (legacy behavior)
+  if (modelName) {
+    // Try exact match first for OpenRouter models
+    const openrouterModels = contextLimits.providers.openrouter.models;
+    if (openrouterModels[modelName]) {
+      return openrouterModels[modelName];
+    }
+
+    // Try exact match for OpenAI models
+    const openaiModels = contextLimits.providers.openai.models;
+    if (openaiModels[modelName]) {
+      return openaiModels[modelName];
+    }
+
+    // For LMStudio models, use the configured limit from .env
+    // This respects whatever is set in LMSTUDIO_CONTEXT_LIMIT
+    if (modelName.includes('lmstudio') || modelName.includes('localhost') || modelName.includes('127.0.0.1')) {
+      return contextLimits.providers.lmstudio.context_limit;
+    }
+  }
+
+  // Use the API-provided fallback limit, or 50000 as final fallback
+  return contextLimits.fallback_limit || 50000;
+}
+
+/**
+ * Determines task mode (basic or enhanced) from a JobResponse
+ * @param job - The job response from the API
+ * @returns "basic" or "enhanced" mode
+ */
+export function detectTaskMode(job: JobResponse): "basic" | "enhanced" {
+  // 1. Check if job.result?.metadata?.runner === "enhanced"
+  if (job.result?.metadata?.runner === "enhanced") {
+    return "enhanced";
+  }
+  
+  // 2. Check if job.result?.metadata?.specialist_consultations > 0
+  if (job.result?.metadata?.specialist_consultations > 0) {
+    return "enhanced";
+  }
+  
+  // 3. Check if job.partial_results?.metadata?.runner === "enhanced"
+  if (job.partial_results?.metadata?.runner === "enhanced") {
+    return "enhanced";
+  }
+  
+  // 4. Check if job.partial_results?.metadata?.specialist_consultations > 0
+  if (job.partial_results?.metadata?.specialist_consultations > 0) {
+    return "enhanced";
+  }
+  
+  // 5. Check if job.metadata?.runner === "enhanced" || job.metadata?.specialist_consultations > 0
+  if (job.metadata?.runner === "enhanced" || job.metadata?.specialist_consultations > 0) {
+    return "enhanced";
+  }
+  
+  // 6. Check if job.job_params?.mode === "enhanced" || job.job_params?.runner === "enhanced"
+  if (job.job_params?.mode === "enhanced" || job.job_params?.runner === "enhanced") {
+    return "enhanced";
+  }
+  
+  // 7. Default to basic
+  return "basic";
 }

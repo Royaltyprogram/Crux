@@ -160,7 +160,7 @@ def create_app() -> FastAPI:
             health.status = "degraded"
         
         # Check providers
-        for provider_name in ["openai", "openrouter"]:
+        for provider_name in ["openai", "openrouter", "lmstudio"]:
             try:
                 provider = create_provider(provider_name=provider_name)
                 health.providers[provider_name] = True

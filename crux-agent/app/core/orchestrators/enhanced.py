@@ -101,14 +101,16 @@ class EnhancedRunner:
         total_phases = 4  # Professor analysis, Specialist consultations, Professor synthesis, Finalization
         current_phase = 0
         
-        def update_phase_progress(phase_progress: float, phase_name: str):
-            """Update progress within current phase."""
+        def update_phase_progress(phase_progress: float, phase_name: str, reasoning_tokens: int = 0):
+            """Update progress within current phase and include reasoning tokens."""
             if progress_callback:
                 # Each phase gets equal weight for simplicity
                 base_progress = current_phase / total_phases
                 phase_weight = 1.0 / total_phases
                 total_progress = base_progress + (phase_progress * phase_weight)
-                progress_callback(total_progress, phase_name)
+                # Include reasoning tokens in the progress metadata
+                progress_metadata = {"reasoning_tokens": reasoning_tokens}
+                progress_callback(total_progress, phase_name, progress_metadata)
         
         # Check for cancellation
         if self._cancelled:
@@ -134,6 +136,18 @@ class EnhancedRunner:
             max_iters=self.professor_max_iters,
             progress_callback=professor_progress,
         )
+        
+        # Enable partial results if job_id is provided in metadata
+        if metadata and metadata.get("job_id"):
+            professor_engine.job_id = metadata["job_id"]
+            # Import redis client here to avoid circular imports
+            try:
+                import redis
+                from app.settings import settings
+                professor_engine.redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+                logger.info(f"Partial results enabled for enhanced job_id: {metadata['job_id']}")
+            except Exception as e:
+                logger.warning(f"Failed to setup Redis for enhanced partial results: {e}")
         
         # Set progress callback on Professor instance
         self.professor._progress_callback = update_phase_progress
@@ -174,26 +188,44 @@ class EnhancedRunner:
         # Extract specialist consultation results from Professor's evolution history
         specialist_results = []
         total_specialist_tokens = 0
+        total_reasoning_tokens = 0
         
         for iteration in professor_solution.evolution_history:
             if "specialist_results" in iteration.get("metadata", {}).get("generator", {}):
                 results = iteration["metadata"]["generator"]["specialist_results"]
                 specialist_results.extend(results)
                 
-                # Aggregate specialist tokens
+                # Aggregate specialist tokens and reasoning tokens
                 for result in results:
                     specialist_tokens = result.get("metadata", {}).get("total_tokens", 0)
                     total_specialist_tokens += specialist_tokens
+                    
+                    # Aggregate reasoning tokens from specialist sessions
+                    session_details = result.get("session_details", {})
+                    for session_iter in session_details.get("iterations", []):
+                        reasoning_tokens = session_iter.get("reasoning_tokens", 0)
+                        total_reasoning_tokens += reasoning_tokens
+                        # Update partial progress with reasoning tokens per iteration
+                        update_phase_progress(0.5, "Specialist consultation in progress", reasoning_tokens)
+            
+            # Also aggregate reasoning tokens from Professor iterations
+            professor_metadata = iteration.get("metadata", {}).get("generator", {})
+            total_reasoning_tokens += professor_metadata.get("reasoning_tokens", 0)
         
         # Also check the final metadata
         if "specialist_results" in professor_solution.metadata:
             results = professor_solution.metadata["specialist_results"]
             specialist_results.extend(results)
             
-            # Aggregate specialist tokens from final metadata
+            # Aggregate specialist tokens and reasoning tokens from final metadata
             for result in results:
                 specialist_tokens = result.get("metadata", {}).get("total_tokens", 0)
                 total_specialist_tokens += specialist_tokens
+                
+                # Aggregate reasoning tokens from specialist sessions
+                session_details = result.get("session_details", {})
+                for session_iter in session_details.get("iterations", []):
+                    total_reasoning_tokens += session_iter.get("reasoning_tokens", 0)
         
         logger.info(f"Professor completed with {len(specialist_results)} specialist consultations")
         logger.info(f"Total specialist tokens: {total_specialist_tokens}, Professor tokens: {professor_solution.total_tokens}")
@@ -218,6 +250,7 @@ class EnhancedRunner:
             "specialist_results": specialist_results,
             "professor_tokens": professor_solution.total_tokens,
             "specialist_tokens": total_specialist_tokens,
+            "reasoning_tokens": total_reasoning_tokens,
         })
         
         # Update the total tokens in the solution
@@ -303,6 +336,18 @@ class EnhancedRunner:
             progress_callback=professor_progress,
         )
         
+        # Enable partial results if job_id is provided in metadata
+        if metadata and metadata.get("job_id"):
+            professor_resume_engine.job_id = metadata["job_id"]
+            # Import redis client here to avoid circular imports
+            try:
+                import redis
+                from app.settings import settings
+                professor_resume_engine.redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+                logger.info(f"Partial results enabled for enhanced resume job_id: {metadata['job_id']}")
+            except Exception as e:
+                logger.warning(f"Failed to setup Redis for enhanced resume partial results: {e}")
+        
         # Set progress callback on Professor instance for specialist consultations
         self.professor._progress_callback = update_phase_progress
         
@@ -348,26 +393,41 @@ class EnhancedRunner:
         # This includes both original and new consultations
         specialist_results = []
         total_specialist_tokens = 0
+        total_reasoning_tokens = 0
         
         for iteration in professor_solution.evolution_history:
             if "specialist_results" in iteration.get("metadata", {}).get("generator", {}):
                 results = iteration["metadata"]["generator"]["specialist_results"]
                 specialist_results.extend(results)
                 
-                # Aggregate specialist tokens
+                # Aggregate specialist tokens and reasoning tokens
                 for result in results:
                     specialist_tokens = result.get("metadata", {}).get("total_tokens", 0)
                     total_specialist_tokens += specialist_tokens
+                    
+                    # Aggregate reasoning tokens from specialist sessions
+                    session_details = result.get("session_details", {})
+                    for session_iter in session_details.get("iterations", []):
+                        total_reasoning_tokens += session_iter.get("reasoning_tokens", 0)
+            
+            # Also aggregate reasoning tokens from Professor iterations
+            professor_metadata = iteration.get("metadata", {}).get("generator", {})
+            total_reasoning_tokens += professor_metadata.get("reasoning_tokens", 0)
         
         # Also check the final metadata
         if "specialist_results" in professor_solution.metadata:
             results = professor_solution.metadata["specialist_results"]
             specialist_results.extend(results)
             
-            # Aggregate specialist tokens from final metadata
+            # Aggregate specialist tokens and reasoning tokens from final metadata
             for result in results:
                 specialist_tokens = result.get("metadata", {}).get("total_tokens", 0)
                 total_specialist_tokens += specialist_tokens
+                
+                # Aggregate reasoning tokens from specialist sessions
+                session_details = result.get("session_details", {})
+                for session_iter in session_details.get("iterations", []):
+                    total_reasoning_tokens += session_iter.get("reasoning_tokens", 0)
         
         logger.info(f"Professor continuation completed with {len(specialist_results)} total specialist consultations")
         logger.info(f"Total specialist tokens: {total_specialist_tokens}, Professor tokens: {professor_solution.total_tokens}")
@@ -391,6 +451,7 @@ class EnhancedRunner:
             "specialist_results": specialist_results,
             "professor_tokens": professor_solution.total_tokens,
             "specialist_tokens": total_specialist_tokens,
+            "reasoning_tokens": total_reasoning_tokens,
             "resumed_from_iteration": current_iterations,
         })
         

@@ -42,6 +42,9 @@ class ProfessorAgent(AbstractAgent):
         # Conversation continuity support (using provider's capabilities)
         self.consultation_history = []  # Track consultation history
         
+        # Initialize reasoning token tracking
+        self.last_reasoning_tokens = 0
+        
         # Define the specialist consultation tool
         self.specialist_tool = {
             "type": "function",
@@ -127,6 +130,15 @@ Begin your analysis and make specialist consultations as needed.
                 temperature=self.temperature,
             )
             
+            # Extract reasoning tokens if available
+            reasoning_tokens = 0
+            reasoning_summary = None
+            if hasattr(self.provider, 'last_reasoning_tokens'):
+                reasoning_tokens = getattr(self.provider, 'last_reasoning_tokens', 0)
+                self.last_reasoning_tokens = reasoning_tokens
+            if hasattr(self.provider, 'last_reasoning_summary'):
+                reasoning_summary = getattr(self.provider, 'last_reasoning_summary', None)
+            
             # Count tokens for initial analysis
             tokens_used = self.provider.count_tokens(initial_prompt)
             if isinstance(response, str):
@@ -170,19 +182,34 @@ Begin your analysis and make specialist consultations as needed.
                 )
                 # Add synthesis tokens
                 tokens_used += self.provider.count_tokens(synthesis)
+                
+                # Extract reasoning tokens from synthesis if available
+                if hasattr(self.provider, 'last_reasoning_tokens'):
+                    synthesis_reasoning_tokens = getattr(self.provider, 'last_reasoning_tokens', 0)
+                    reasoning_tokens += synthesis_reasoning_tokens
+                    self.last_reasoning_tokens = reasoning_tokens
             else:
                 synthesis = response if isinstance(response, str) else response.content
             
             logger.info(f"Professor completed analysis with {len(specialist_results)} specialist consultations, tokens: {tokens_used}")
             
+            # Build metadata with reasoning token information
+            metadata = {
+                "specialist_consultations": len(specialist_results),
+                "specialist_results": specialist_results,
+                "approach": "function_calling",
+                "function_calling_used": True,
+            }
+            
+            # Add reasoning token metadata if available
+            if reasoning_tokens > 0:
+                metadata["reasoning_tokens"] = reasoning_tokens
+            if reasoning_summary:
+                metadata["reasoning_summary"] = reasoning_summary
+            
             return AgentResult(
                 output=synthesis,
-                metadata={
-                    "specialist_consultations": len(specialist_results),
-                    "specialist_results": specialist_results,
-                    "approach": "function_calling",
-                    "function_calling_used": True,
-                },
+                metadata=metadata,
                 tokens_used=tokens_used,
             )
             
@@ -580,6 +607,12 @@ Provide your final synthesis:
                 temperature=0.5,  # Moderate temperature for synthesis
             )
             
+            # Extract reasoning tokens from synthesis if available
+            if hasattr(self.provider, 'last_reasoning_tokens'):
+                synthesis_reasoning_tokens = getattr(self.provider, 'last_reasoning_tokens', 0)
+                if synthesis_reasoning_tokens > 0:
+                    self.last_reasoning_tokens += synthesis_reasoning_tokens
+            
             return synthesis
             
         except Exception as e:
@@ -647,15 +680,33 @@ Please synthesize these specialist results into a comprehensive solution that:
                 temperature=0.5,  # Moderate temperature for synthesis
             )
             
+            # Extract reasoning tokens if available
+            reasoning_tokens = 0
+            reasoning_summary = None
+            if hasattr(self.provider, 'last_reasoning_tokens'):
+                reasoning_tokens = getattr(self.provider, 'last_reasoning_tokens', 0)
+                self.last_reasoning_tokens = reasoning_tokens
+            if hasattr(self.provider, 'last_reasoning_summary'):
+                reasoning_summary = getattr(self.provider, 'last_reasoning_summary', None)
+            
             # Count tokens for synthesis
             tokens_used = self.provider.count_tokens(synthesis_prompt + synthesis)
             
+            # Build metadata with reasoning token information
+            metadata = {
+                "specialist_count": len(specialist_results),
+                "synthesis_plan": synthesis_plan,
+            }
+            
+            # Add reasoning token metadata if available
+            if reasoning_tokens > 0:
+                metadata["reasoning_tokens"] = reasoning_tokens
+            if reasoning_summary:
+                metadata["reasoning_summary"] = reasoning_summary
+            
             return AgentResult(
                 output=synthesis,
-                metadata={
-                    "specialist_count": len(specialist_results),
-                    "synthesis_plan": synthesis_plan,
-                },
+                metadata=metadata,
                 tokens_used=tokens_used,
             )
             
@@ -713,6 +764,15 @@ Use your previous analysis and specialist consultations to provide a comprehensi
                 temperature=self.temperature,
             )
             
+            # Extract reasoning tokens if available
+            reasoning_tokens = 0
+            reasoning_summary = None
+            if hasattr(self.provider, 'last_reasoning_tokens'):
+                reasoning_tokens = getattr(self.provider, 'last_reasoning_tokens', 0)
+                self.last_reasoning_tokens = reasoning_tokens
+            if hasattr(self.provider, 'last_reasoning_summary'):
+                reasoning_summary = getattr(self.provider, 'last_reasoning_summary', None)
+            
             # Count tokens for follow-up
             tokens_used = self.provider.count_tokens(follow_up_prompt)
             if isinstance(response, str):
@@ -727,13 +787,22 @@ Use your previous analysis and specialist consultations to provide a comprehensi
             
             logger.info(f"Conversation continuation completed, tokens: {tokens_used}")
             
+            # Build metadata with reasoning token information
+            metadata = {
+                "conversation_continued": True,
+                "provider_continuation": True,
+                "approach": "provider_continuation",
+            }
+            
+            # Add reasoning token metadata if available
+            if reasoning_tokens > 0:
+                metadata["reasoning_tokens"] = reasoning_tokens
+            if reasoning_summary:
+                metadata["reasoning_summary"] = reasoning_summary
+            
             return AgentResult(
                 output=content,
-                metadata={
-                    "conversation_continued": True,
-                    "provider_continuation": True,
-                    "approach": "provider_continuation",
-                },
+                metadata=metadata,
                 tokens_used=tokens_used,
             )
             

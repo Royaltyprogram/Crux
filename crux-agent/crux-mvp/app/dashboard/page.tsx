@@ -217,6 +217,20 @@ export default function DashboardPage() {
                       <span className="font-mono text-xs text-gray-500 uppercase">
                         {task.mode} mode
                       </span>
+                      {task.mode === "enhanced" && task.result?.metadata?.specialist_consultations && (
+                        <Badge
+                          variant="secondary"
+                          className="font-mono text-xs bg-purple-100 text-purple-800 border-purple-300"
+                          title={`Specialist consultations: ${task.result.metadata.specialist_iterations?.map((s: any, i: number) => `${i+1}: ${s.iterations} iter${s.iterations !== 1 ? 's' : ''}`).join(', ') || 'Details not available'}`}
+                        >
+                          {task.result.metadata.specialist_consultations} specialist{task.result.metadata.specialist_consultations !== 1 ? 's' : ''}
+                          {task.result.metadata.specialist_iterations && (
+                            <span className="ml-1 text-purple-600">
+                              ({task.result.metadata.specialist_iterations.reduce((total: number, s: any) => total + (s.iterations || 0), 0)} total iters)
+                            </span>
+                          )}
+                        </Badge>
+                      )}
                       {(task.status === "running" ||
                         task.status === "pending") && (
                         <span className="font-mono text-xs text-blue-600">
@@ -256,14 +270,24 @@ export default function DashboardPage() {
                       </Link>
                     ) : task.status === "running" ||
                       task.status === "pending" ? (
-                      <Button
-                        onClick={() => handleCancelTask(task.id)}
-                        disabled={cancelling === task.id}
-                        variant="outline"
-                        className="font-mono border-red-300 text-red-600 hover:bg-red-600 hover:text-white px-4 py-2 text-sm bg-transparent"
-                      >
-                        {cancelling === task.id ? "Cancelling..." : "Cancel"}
-                      </Button>
+                      <>
+                        <Link href={`/task/${task.id}`}>
+                          <Button
+                            variant="outline"
+                            className="font-mono border-black text-black hover:bg-black hover:text-white px-4 py-2 text-sm bg-transparent"
+                          >
+                            View Partial
+                          </Button>
+                        </Link>
+                        <Button
+                          onClick={() => handleCancelTask(task.id)}
+                          disabled={cancelling === task.id}
+                          variant="outline"
+                          className="font-mono border-red-300 text-red-600 hover:bg-red-600 hover:text-white px-4 py-2 text-sm bg-transparent"
+                        >
+                          {cancelling === task.id ? "Cancelling..." : "Cancel"}
+                        </Button>
+                      </>
                     ) : (
                       <Button
                         variant="outline"

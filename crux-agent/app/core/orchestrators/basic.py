@@ -114,6 +114,18 @@ class BasicRunner:
         # Set progress callback on SelfEvolve engine
         self.engine.progress_callback = self_evolve_progress
         
+        # Enable partial results if job_id is provided in metadata
+        if metadata and metadata.get("job_id"):
+            self.engine.job_id = metadata["job_id"]
+            # Import redis client here to avoid circular imports
+            try:
+                import redis
+                from app.settings import settings
+                self.engine.redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+                logger.info(f"Partial results enabled for job_id: {metadata['job_id']}")
+            except Exception as e:
+                logger.warning(f"Failed to setup Redis for partial results: {e}")
+        
         # Initial progress
         if progress_callback:
             progress_callback(0.1, "Starting basic solve")
@@ -207,6 +219,18 @@ class BasicRunner:
         
         # Set progress callback on SelfEvolve engine
         resume_engine.progress_callback = self_evolve_progress
+        
+        # Enable partial results if job_id is provided in metadata
+        if metadata and metadata.get("job_id"):
+            resume_engine.job_id = metadata["job_id"]
+            # Import redis client here to avoid circular imports
+            try:
+                import redis
+                from app.settings import settings
+                resume_engine.redis_client = redis.from_url(settings.redis_url, decode_responses=True)
+                logger.info(f"Partial results enabled for resumed job_id: {metadata['job_id']}")
+            except Exception as e:
+                logger.warning(f"Failed to setup Redis for partial results on resume: {e}")
         
         # Initial progress
         if progress_callback:

@@ -170,9 +170,18 @@ async def _solve_basic_async(job_id: str, request_data: dict, task):
     start_time = time.time()
     
     # Create provider using request settings or defaults
+    llm_provider = request_data.get("llm_provider")
+    
+    # Handle LMStudio no-auth case
+    api_key = None
+    if llm_provider == "lmstudio":
+        # For LMStudio, explicitly pass empty string to allow no-auth servers
+        api_key = ""
+    
     provider = create_provider(
-        provider_name=request_data.get("llm_provider"),
+        provider_name=llm_provider,
         model=request_data.get("model_name"),
+        api_key=api_key,
     )
     
     # Create runner
@@ -184,15 +193,30 @@ async def _solve_basic_async(job_id: str, request_data: dict, task):
     # Setup progress tracking
     redis_client = get_redis_sync()
     
-    def update_progress(progress: float, phase: str = ""):
-        """Update progress in Redis and Celery."""
+    def update_progress(progress: float, phase: str = "", metadata: dict = None):
+        """Update progress in Redis and Celery with optional metadata."""
+        # Build meta dict with progress and phase
+        meta = {"progress": progress, "phase": phase}
+        
+        # Add reasoning tokens and other metadata if available
+        if metadata:
+            meta.update(metadata)
+        
         task.update_state(
             state="PROGRESS",
-            meta={"progress": progress, "phase": phase},
+            meta=meta,
         )
         redis_client.hset(f"job:{job_id}", "progress", progress)
         if phase:
             redis_client.hset(f"job:{job_id}", "current_phase", phase)
+        
+        # Store reasoning tokens in Redis if available
+        if metadata and "reasoning_tokens" in metadata:
+            redis_client.hset(f"job:{job_id}", "reasoning_tokens", metadata["reasoning_tokens"])
+        
+        # Log progress updates with reasoning tokens if available
+        reasoning_info = f" (reasoning: {metadata.get('reasoning_tokens', 0)})" if metadata and "reasoning_tokens" in metadata else ""
+        logger.info(f"[{job_id}] Progress update: {progress:.1%} - {phase}{reasoning_info}")
     
     # Solve with real-time progress tracking
     solution = await runner.solve(
@@ -236,20 +260,40 @@ async def _solve_enhanced_async(job_id: str, request_data: dict, task):
     start_time = time.time()
     redis_client = get_redis_sync()
     
-    def update_progress(progress: float, phase: str = ""):
-        """Update progress in Redis and Celery."""
+    def update_progress(progress: float, phase: str = "", metadata: dict = None):
+        """Update progress in Redis and Celery with optional metadata."""
+        # Build meta dict with progress and phase
+        meta = {"progress": progress, "phase": phase}
+        
+        # Add reasoning tokens and other metadata if available
+        if metadata:
+            meta.update(metadata)
+        
         task.update_state(
             state="PROGRESS",
-            meta={"progress": progress, "phase": phase},
+            meta=meta,
         )
         redis_client.hset(f"job:{job_id}", "progress", progress)
         if phase:
             redis_client.hset(f"job:{job_id}", "current_phase", phase)
+        
+        # Store reasoning tokens in Redis if available
+        if metadata and "reasoning_tokens" in metadata:
+            redis_client.hset(f"job:{job_id}", "reasoning_tokens", metadata["reasoning_tokens"])
     
     # Create provider using request settings or defaults
+    llm_provider = request_data.get("llm_provider")
+    
+    # Handle LMStudio no-auth case
+    api_key = None
+    if llm_provider == "lmstudio":
+        # For LMStudio, explicitly pass empty string to allow no-auth servers
+        api_key = ""
+    
     provider = create_provider(
-        provider_name=request_data.get("llm_provider"),
+        provider_name=llm_provider,
         model=request_data.get("model_name"),
+        api_key=api_key,
     )
     
     # Create runner
@@ -301,9 +345,18 @@ async def _continue_basic_async(job_id: str, original_request_data: dict, evolut
     start_time = time.time()
     
     # Create provider using original request settings or defaults
+    llm_provider = original_request_data.get("llm_provider")
+    
+    # Handle LMStudio no-auth case
+    api_key = None
+    if llm_provider == "lmstudio":
+        # For LMStudio, explicitly pass empty string to allow no-auth servers
+        api_key = ""
+    
     provider = create_provider(
-        provider_name=original_request_data.get("llm_provider"),
+        provider_name=llm_provider,
         model=original_request_data.get("model_name"),
+        api_key=api_key,
     )
     
     # Create runner
@@ -315,15 +368,26 @@ async def _continue_basic_async(job_id: str, original_request_data: dict, evolut
     # Setup progress tracking
     redis_client = get_redis_sync()
     
-    def update_progress(progress: float, phase: str = ""):
-        """Update progress in Redis and Celery."""
+    def update_progress(progress: float, phase: str = "", metadata: dict = None):
+        """Update progress in Redis and Celery with optional metadata."""
+        # Build meta dict with progress and phase
+        meta = {"progress": progress, "phase": phase}
+        
+        # Add reasoning tokens and other metadata if available
+        if metadata:
+            meta.update(metadata)
+        
         task.update_state(
             state="PROGRESS",
-            meta={"progress": progress, "phase": phase},
+            meta=meta,
         )
         redis_client.hset(f"job:{job_id}", "progress", progress)
         if phase:
             redis_client.hset(f"job:{job_id}", "current_phase", phase)
+        
+        # Store reasoning tokens in Redis if available
+        if metadata and "reasoning_tokens" in metadata:
+            redis_client.hset(f"job:{job_id}", "reasoning_tokens", metadata["reasoning_tokens"])
     
     # Resume solve with additional iterations
     solution = await runner.resume_solve(
@@ -428,9 +492,18 @@ async def _continue_enhanced_async(job_id: str, original_request_data: dict, evo
     start_time = time.time()
     
     # Create provider using original request settings or defaults
+    llm_provider = original_request_data.get("llm_provider")
+    
+    # Handle LMStudio no-auth case
+    api_key = None
+    if llm_provider == "lmstudio":
+        # For LMStudio, explicitly pass empty string to allow no-auth servers
+        api_key = ""
+    
     provider = create_provider(
-        provider_name=original_request_data.get("llm_provider"),
+        provider_name=llm_provider,
         model=original_request_data.get("model_name"),
+        api_key=api_key,
     )
     
     # Create runner
@@ -443,15 +516,26 @@ async def _continue_enhanced_async(job_id: str, original_request_data: dict, evo
     # Setup progress tracking
     redis_client = get_redis_sync()
     
-    def update_progress(progress: float, phase: str = ""):
-        """Update progress in Redis and Celery."""
+    def update_progress(progress: float, phase: str = "", metadata: dict = None):
+        """Update progress in Redis and Celery with optional metadata."""
+        # Build meta dict with progress and phase
+        meta = {"progress": progress, "phase": phase}
+        
+        # Add reasoning tokens and other metadata if available
+        if metadata:
+            meta.update(metadata)
+        
         task.update_state(
             state="PROGRESS",
-            meta={"progress": progress, "phase": phase},
+            meta=meta,
         )
         redis_client.hset(f"job:{job_id}", "progress", progress)
         if phase:
             redis_client.hset(f"job:{job_id}", "current_phase", phase)
+        
+        # Store reasoning tokens in Redis if available
+        if metadata and "reasoning_tokens" in metadata:
+            redis_client.hset(f"job:{job_id}", "reasoning_tokens", metadata["reasoning_tokens"])
     
     # Resume solve with additional iterations
     solution = await runner.resume_solve(
