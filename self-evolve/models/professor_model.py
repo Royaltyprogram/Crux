@@ -6,6 +6,7 @@ Updated to use OpenAI Responses API with proper tool use
 import json
 from typing import Dict, Any, List, Optional
 from .base_model import BaseModel
+from app.core.providers.factory import create_provider
 from .self_evolve_mixin import SelfEvolveMixin
 from ..config import FrameworkConfig
 from ..utils.logger import get_logger
@@ -474,7 +475,11 @@ class ProfessorModel(SelfEvolveMixin, BaseModel):
         constraints = arguments.get("problem_constraints", "")
         
         # Create new graduate worker using framework config
-        worker = GraduateWorker(self.framework_config, f"worker_{len(self.graduate_workers)}")
+        # Create or reuse a provider instance that aligns with current settings
+        provider = create_provider(model=self.framework_config.worker_config.model_name,
+                                   api_key=self.framework_config.worker_config.api_key)
+
+        worker = GraduateWorker(self.framework_config, f"worker_{len(self.graduate_workers)}", provider=provider)
         self.graduate_workers.append(worker)
         
         # Build full task with context (constraints passed separately)

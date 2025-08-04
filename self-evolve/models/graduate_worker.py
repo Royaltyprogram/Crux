@@ -14,9 +14,9 @@ from ..utils.logger import get_logger
 class SpecializedGeneratorModel(GeneratorModel):
     """Generator model specialized for a specific domain using Responses API"""
     
-    def __init__(self, config: ModelConfig, specialization: str):
+    def __init__(self, config: ModelConfig, specialization: str, provider: Optional[Any] = None):
         """Initialize with specialization"""
-        super().__init__(config)
+        super().__init__(config, provider=provider)
         self.specialization = specialization
         self.logger = get_logger(f"SpecializedGenerator[{specialization}]")
         
@@ -101,11 +101,13 @@ This task is critical for the professor's research. Your work must be impeccable
 class GraduateWorker:
     """Graduate student worker with self-evolve mechanism for specialized tasks using Responses API"""
     
-    def __init__(self, config: FrameworkConfig, worker_id: str):
+    def __init__(self, config: FrameworkConfig, worker_id: str, provider: Optional[Any] = None):
         """Initialize graduate worker"""
         self.config = config
         self.worker_id = worker_id
         self.current_specialization = None
+        # Optional shared provider instance for all internal model calls
+        self._provider = provider
         self.logger = get_logger(f"GraduateWorker[{worker_id}]")
         
     def solve_specialized_task(self, specialization: str, task: str, professor_reasoning_context: str = "", constraints: Optional[str] = None) -> Dict[str, Any]:
@@ -141,7 +143,8 @@ class GraduateWorker:
         # Create specialized generator
         specialized_generator = SpecializedGeneratorModel(
             config=specialized_generator_config,
-            specialization=specialization
+            specialization=specialization,
+             provider=self._provider
         )
         
         # Use the same evaluator configuration but potentially with different settings
@@ -161,7 +164,7 @@ class GraduateWorker:
         
         evaluator_config = ModelConfig(**evaluator_config_params)
         
-        evaluator = EvaluatorModel(evaluator_config)
+        evaluator = EvaluatorModel(evaluator_config, provider=self._provider)
         
         # Create iteration manager for this specialist
         # Using the same self-evolve mechanism as example_usage.py but optimized for specialization
