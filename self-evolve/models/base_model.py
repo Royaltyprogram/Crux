@@ -18,12 +18,16 @@ CODE_INTERPRETER_TOOL = {
 class BaseModel(ABC):
     """Abstract base class for LLM models"""
     
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: ModelConfig, provider: Optional[Any] = None):
         self.config = config
+        # Optional injected provider implementing a `complete` coroutine
+        self.provider = provider
         self.logger = get_logger(self.__class__.__name__)
         # Holds the most recent reasoning summary text (detailed) returned by the model
         self.last_reasoning_summary: str = ""
-        self._setup_client()
+        # Only setup OpenAI client when a custom provider is NOT supplied
+        if self.provider is None:
+            self._setup_client()
     
     def _setup_client(self):
         """Setup OpenAI client to use chat completions only"""
@@ -39,6 +43,20 @@ class BaseModel(ABC):
         pass
     
     def _make_api_call(self, messages: list, **kwargs) -> str:
+        """Unified API dispatcher.
+        If a provider instance was injected, delegate the call to it, otherwise
+        fall back to the built-in OpenAI/Responses implementation.
+        """
+
+        # ----------------------------------------------------------
+        # 1) Provider delegation path (works for OpenRouter / LMStudio)
+        # ----------------------------------------------------------
+        if self.provider is not None:
+            return self._make_provider_call(messages, **kwargs)
+
+        # ----------------------------------------------------------
+        # 2) Legacy OpenAI path
+        # ----------------------------------------------------------
         """Dispatcher that selects between chat completions API (default) and
         the newer responses API which is required for the `o3-pro` model.
 
@@ -57,6 +75,43 @@ class BaseModel(ABC):
         except Exception as err:
             self.logger.error(f"Responses API call failed: {err}")
             raise
+
+    def _make_provider_call(self, messages: list, **kwargs) -> str:
+        """Call the injected provider. Converts our messages list into the
+        provider's expected parameters (system_prompt + prompt).
+        """
+        import asyncio
+
+        # Separate system + user content (assumes one of each for our usage)
+        system_prompt = "\n".join([m["content"] for m in messages if m["role"] == "system"]) or None
+        user_msgs = [m["content"] for m in messages if m["role"] == "user"]
+        prompt = user_msgs[-1] if user_msgs else ""
+
+        async def _call_async():
+            return await self.provider.complete(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=kwargs.get("temperature", getattr(self.config, "temperature", 0.7)),
+                stream=kwargs.get("stream", getattr(self.config, "stream", False)),
+                **{k: v for k, v in kwargs.items() if k not in ("temperature", "stream")}
+            )
+
+        # Ensure we can run regardless of existing event loop (Jupyter etc.)
+        try:
+            result = asyncio.run(_call_async())
+        except RuntimeError:
+            # Event loop already running – create a new task and wait
+            result = asyncio.get_event_loop().run_until_complete(_call_async())
+
+        # Attempt to capture reasoning summary if provider exposes it
+        if hasattr(self.provider, "get_last_reasoning_summary"):
+            self.last_reasoning_summary = self.provider.get_last_reasoning_summary()
+
+        return result
+
+    # ------------------------------------------------------------------
+    # Existing Responses API implementation below (unchanged)
+    # ------------------------------------------------------------------
 
     def _make_response_api_call(self, messages: list, **kwargs) -> str:
         """Dedicated call path for `o3-pro` models using the `responses` API.

@@ -71,7 +71,9 @@ class SelfEvolveMixin:
         cfg: FrameworkConfig = self.framework_config
 
         # evaluator 인스턴스 준비 (Professor 용 별도 Evaluator-P 로 간주)
-        evaluator = EvaluatorModel(cfg.evaluator_config)
+        # Pass through provider from host model if available
+        provider = getattr(self, "_provider", None)
+        evaluator = EvaluatorModel(cfg.evaluator_config, provider=provider)
 
         # max_iterations 동적 override (원본 값 백업 후 복원)
         original_max_iter = cfg.max_iterations

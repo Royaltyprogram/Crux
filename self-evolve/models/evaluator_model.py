@@ -2,13 +2,16 @@
 Evaluator model for analyzing Q&A pairs and providing feedback
 """
 
-from typing import Dict, Tuple, Optional
+from typing import Dict, Tuple, Optional, Any
 from .base_model import BaseModel
 
 
 class EvaluatorModel(BaseModel):
     """Model for evaluating Q&A pairs and providing detailed analysis"""
     
+    def __init__(self, config, provider: Optional[Any] = None):
+        super().__init__(config, provider=provider)
+
     def generate(self, prompt: str, **kwargs) -> str:
         """Dummy generate to satisfy abstractmethod; redirects to evaluate-like analysis.
 
