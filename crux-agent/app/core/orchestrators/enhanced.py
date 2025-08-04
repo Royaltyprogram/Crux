@@ -394,7 +394,7 @@ class EnhancedRunner:
         specialist_results = []
         total_specialist_tokens = 0
         total_reasoning_tokens = 0
-        
+
         for iteration in professor_solution.evolution_history:
             if "specialist_results" in iteration.get("metadata", {}).get("generator", {}):
                 results = iteration["metadata"]["generator"]["specialist_results"]
@@ -428,7 +428,7 @@ class EnhancedRunner:
                 session_details = result.get("session_details", {})
                 for session_iter in session_details.get("iterations", []):
                     total_reasoning_tokens += session_iter.get("reasoning_tokens", 0)
-        
+
         logger.info(f"Professor continuation completed with {len(specialist_results)} total specialist consultations")
         logger.info(f"Total specialist tokens: {total_specialist_tokens}, Professor tokens: {professor_solution.total_tokens}")
         
