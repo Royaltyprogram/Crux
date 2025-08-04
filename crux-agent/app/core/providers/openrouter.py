@@ -196,6 +196,9 @@ class OpenRouterProvider(BaseProvider):
             "temperature": temperature,
             "stream": stream,
         }
+        # Ensure reasoning and usage tracking are enabled by default unless caller overrides
+        payload.setdefault("reasoning", {"effort": "high"})
+        payload.setdefault("usage", {"include": True})
         
         if max_tokens:
             payload["max_tokens"] = max_tokens
@@ -245,20 +248,41 @@ class OpenRouterProvider(BaseProvider):
                 logger.debug(f"OpenRouter reasoning content found, estimated {self.last_reasoning_tokens} reasoning tokens")
             
             # Check for reasoning tokens in usage metadata
+            # If usage missing, fetch it via /generation/<id> endpoint (OpenRouter feature)
+            if "usage" not in data and "id" in data:
+                gen_id = data["id"]
+                try:
+                    usage_resp = await self._make_request(
+                        "GET",
+                        f"https://openrouter.ai/api/v1/generation/{gen_id}",
+                        headers=self._get_headers(),
+                    )
+                    usage_data = usage_resp.json()
+                    if "usage" in usage_data:
+                        data["usage"] = usage_data["usage"]
+                        logger.debug(f"Fetched usage for gen {gen_id}: {data['usage']}")
+                except Exception as fetch_err:
+                    logger.warning(f"Failed to fetch usage info for generation {gen_id}: {fetch_err}")
             if "usage" in data:
                 usage = data["usage"]
                 logger.debug(f"OpenRouter usage: {usage}")
                 
                 # Look for reasoning tokens in usage (various possible field names)
+                # New: check nested completion_tokens_details.reasoning_tokens per OpenRouter docs
                 reasoning_tokens_from_usage = (
                     usage.get("reasoning_tokens", 0) or
                     usage.get("reasoning_completion_tokens", 0) or
-                    usage.get("cached_reasoning_tokens", 0)
+                    usage.get("cached_reasoning_tokens", 0) or
+                    usage.get("completion_tokens_details", {}).get("reasoning_tokens", 0)
                 )
                 
                 if reasoning_tokens_from_usage > 0:
                     self.last_reasoning_tokens = reasoning_tokens_from_usage
                     logger.debug(f"OpenRouter reasoning tokens from usage: {reasoning_tokens_from_usage}")
+                # Fallback: if provider did not supply explicit reasoning tokens, approximate using completion_tokens
+                elif self.last_reasoning_tokens == 0 and usage.get("completion_tokens"):
+                    self.last_reasoning_tokens = usage.get("completion_tokens")
+                    logger.debug(f"Approximated reasoning tokens using completion_tokens: {self.last_reasoning_tokens}")
             
             return content
 

@@ -149,7 +149,7 @@ Begin your analysis and make specialist consultations as needed.
             # Parse the response and handle function calls
             specialist_results = []
             
-            # Process function calls if any
+            # Process structured function calls if any
             if hasattr(response, 'function_calls') and response.function_calls:
                 logger.info(f"Professor making {len(response.function_calls)} specialist consultations")
                 for i, func_call in enumerate(response.function_calls, 1):
@@ -172,6 +172,51 @@ Begin your analysis and make specialist consultations as needed.
                             progress_callback
                         )
                         specialist_results.append(specialist_result)
+            else:
+                # Fallback parsing of textual specialist calls when provider lacks structured tool support
+                if isinstance(response, str):
+                    # 1) Check for legacy one-liner format: consult_graduate_specialist({...})
+                    import re
+                    pattern = r"consult_graduate_specialist\s*\((.*)\)"
+                    for line in response.splitlines():
+                        line = line.strip()
+                        match = re.search(pattern, line)
+                        if match:
+                            json_part = match.group(1)
+                            try:
+                                arguments = json.loads(json_part)
+                                logger.info(f"Specialist consultation (text-trigger): {arguments.get('expertise') or arguments.get('specialization', 'unknown')}")
+                                specialist_result = await self._execute_specialist_consultation(
+                                    arguments,
+                                    context.prompt,
+                                    constraints,
+                                    progress_callback,
+                                )
+                                specialist_results.append(specialist_result)
+                            except json.JSONDecodeError:
+                                logger.error(f"Failed to parse specialist arguments: {json_part}")
+                    # 2) Check for new JSON array format containing tool entries
+                    if not specialist_results and '"tool"' in response and 'consult_graduate_specialist' in response:
+                        try:
+                            # Attempt to locate the JSON array boundaries
+                            start = response.find('[')
+                            end = response.rfind(']') + 1
+                            if start != -1 and end > start:
+                                json_blob = response[start:end]
+                                tool_calls = json.loads(json_blob)
+                                for call in tool_calls:
+                                    if isinstance(call, dict) and call.get('tool') == 'consult_graduate_specialist':
+                                        arguments = call.get('parameters', {})
+                                        logger.info(f"Specialist consultation (json-array): {arguments.get('expertise') or arguments.get('specialization', 'unknown')}")
+                                        specialist_result = await self._execute_specialist_consultation(
+                                            arguments,
+                                            context.prompt,
+                                            constraints,
+                                            progress_callback,
+                                        )
+                                        specialist_results.append(specialist_result)
+                        except json.JSONDecodeError:
+                            logger.error("Failed to parse JSON tool call array from model output")
             
             # Get the final synthesis
             if specialist_results:
@@ -259,10 +304,12 @@ Begin your analysis and make specialist consultations as needed.
                 return response
             elif functions:
                 # Try passing functions to regular complete method
-                logger.info("Provider doesn't have complete_with_functions, trying complete with functions parameter")
+                # Provider lacks explicit function-calling support; fall back to a plain completion
+                # WITHOUT passing the functions payload because some providers (e.g. LMStudio) will
+                # reject unknown parameters.
+                logger.info("Provider doesn't have complete_with_functions; falling back to plain completion")
                 response = await self.provider.complete(
                     prompt=prompt,
-                    functions=functions,
                     system_prompt=self.system_prompt,
                     temperature=temperature if temperature is not None else self.temperature,
                 )

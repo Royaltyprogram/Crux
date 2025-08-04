@@ -252,6 +252,14 @@ async def get_job_status(
         # Add result if completed
         if job_data["status"] == JobStatus.COMPLETED and "result" in job_data:
             result_data = json.loads(job_data["result"])
+            # Ensure token fields are accessible at the top level of metadata
+            if "metadata" in result_data:
+                metadata = result_data["metadata"].copy()
+                # Make sure key token fields are available at metadata level for frontend access
+                for token_field in ["professor_tokens", "specialist_tokens", "reasoning_tokens"]:
+                    if token_field in result_data["metadata"]:
+                        metadata[token_field] = result_data["metadata"][token_field]
+                result_data["metadata"] = metadata
             response.result = SolutionResponse(**result_data)
         
         # Add error if failed

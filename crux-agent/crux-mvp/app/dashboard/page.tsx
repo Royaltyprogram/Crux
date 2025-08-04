@@ -256,6 +256,12 @@ export default function DashboardPage() {
                           {formatDuration(task.result.processing_time)}
                         </div>
                       )}
+                      {(task.modelName || task.providerName) && (
+                        <div className="text-gray-700">
+                          Model: {task.modelName || "unknown"}
+                          {task.providerName ? ` (via ${task.providerName})` : ""}
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="ml-4 flex gap-2">

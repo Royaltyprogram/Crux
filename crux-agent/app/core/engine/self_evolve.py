@@ -333,6 +333,10 @@ class SelfEvolve:
                     "iterations": len(evolution_history),
                     "latest_iteration": iteration_data,
                     "evolution_history": evolution_history,
+                    # Include cumulative token metrics so the GUI can surface them mid-run
+                    "total_tokens": total_tokens,
+                    # Reasoning tokens are stored per-agent in metadata; aggregate if present
+                    "reasoning_tokens": total_reasoning_tokens if 'total_reasoning_tokens' in locals() else 0,
                     "timestamp": datetime.utcnow().isoformat()
                 }
                 self.redis_client.hset(f"job:{self.job_id}", "partial_results", json.dumps(partial_result))

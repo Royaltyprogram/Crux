@@ -210,6 +210,9 @@ interface EvolutionHistoryItem {
   output: string;
   feedback: string;
   should_stop: boolean;
+  reasoning_summary?: string;
+  evaluator_reasoning_summary?: string;
+  refiner_reasoning_summary?: string;
 }
 
 interface SpecialistResult {
@@ -1138,6 +1141,55 @@ export default function TaskDetailPage() {
                                     content={iteration.output}
                                   />
                                 </div>
+
+                                {/* Reasoning summaries */}
+                                {(iteration.reasoning_summary ||
+                                  iteration.evaluator_reasoning_summary ||
+                                  iteration.refiner_reasoning_summary) && (
+                                  <div className="mt-3">
+                                    <Accordion type="single" collapsible className="w-full">
+                                      {iteration.reasoning_summary && (
+                                        <AccordionItem value={`gen-reasoning-${index}`}>
+                                          <AccordionTrigger className="font-mono text-sm text-gray-600 hover:text-black">
+                                            <div className="flex items-center gap-2">
+                                              <span>💭</span>
+                                              <span>{isEnhanced ? "Professor" : "Generator"} Reasoning</span>
+                                            </div>
+                                          </AccordionTrigger>
+                                          <AccordionContent className="pt-2">
+                                            <MarkdownRenderer content={iteration.reasoning_summary} />
+                                          </AccordionContent>
+                                        </AccordionItem>
+                                      )}
+                                      {iteration.evaluator_reasoning_summary && (
+                                        <AccordionItem value={`eval-reasoning-${index}`}>
+                                          <AccordionTrigger className="font-mono text-sm text-gray-600 hover:text-black">
+                                            <div className="flex items-center gap-2">
+                                              <span>🧐</span>
+                                              <span>Evaluator Reasoning</span>
+                                            </div>
+                                          </AccordionTrigger>
+                                          <AccordionContent className="pt-2">
+                                            <MarkdownRenderer content={iteration.evaluator_reasoning_summary} />
+                                          </AccordionContent>
+                                        </AccordionItem>
+                                      )}
+                                      {iteration.refiner_reasoning_summary && (
+                                        <AccordionItem value={`refiner-reasoning-${index}`}>
+                                          <AccordionTrigger className="font-mono text-sm text-gray-600 hover:text-black">
+                                            <div className="flex items-center gap-2">
+                                              <span>📝</span>
+                                              <span>Prompt Refiner Reasoning</span>
+                                            </div>
+                                          </AccordionTrigger>
+                                          <AccordionContent className="pt-2">
+                                            <MarkdownRenderer content={iteration.refiner_reasoning_summary} />
+                                          </AccordionContent>
+                                        </AccordionItem>
+                                      )}
+                                    </Accordion>
+                                  </div>
+                                )}
                               </div>
                             ))}
                           </div>
