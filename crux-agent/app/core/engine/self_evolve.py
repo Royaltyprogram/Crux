@@ -44,6 +44,7 @@ class SelfEvolve:
         *,
         max_iters: int = 3,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        allow_continuation_fallback: bool = True,
     ):
         """
         Initialize Self-Evolve engine.
@@ -54,15 +55,17 @@ class SelfEvolve:
             refiner: Agent that refines prompts based on feedback
             max_iters: Maximum number of iterations
             progress_callback: Optional callback for progress updates (current_iter, max_iters, phase)
+            allow_continuation_fallback: When True (default), allows fallback to best valid iteration when continuation fails
         """
         self.generator = generator
         self.evaluator = evaluator
         self.refiner = refiner
         self.max_iters = max_iters
         self.progress_callback = progress_callback
+        self.allow_continuation_fallback = allow_continuation_fallback
         self._cancelled = False  # Add cancellation flag
         
-        logger.info(f"SelfEvolve initialized with max_iters={max_iters}")
+        logger.info(f"SelfEvolve initialized with max_iters={max_iters}, allow_continuation_fallback={allow_continuation_fallback}")
     
     def cancel(self):
         """Cancel the current solve operation."""
@@ -123,6 +126,11 @@ class SelfEvolve:
         if evolution_history is None:
             evolution_history = []
             
+        # Only validate evolution history if it's not empty (for resume scenarios)
+        if evolution_history and not any(self._is_valid_output(item.get("output", "")) for item in evolution_history):
+            logger.error("Evolution history exists but contains no valid outputs.")
+            raise ValueError("All outputs in evolution history are invalid.")
+        
         logger.info(f"Starting Self-Evolve from iteration {start_iteration} for: {problem.question[:100]}...")
 
         # Reset cancellation flag
@@ -138,6 +146,14 @@ class SelfEvolve:
         best_iteration = None        # Dict from evolution_history
         best_output = ""
         fallback_triggered = False
+        
+        # When continuation is requested (evolution_history not empty), find the best valid iteration
+        # to use as fallback if current iteration cannot yield valid output
+        if evolution_history and self.allow_continuation_fallback:
+            best_iteration = self._find_best_valid_iteration(evolution_history)
+            if best_iteration:
+                best_output = best_iteration["output"]
+                logger.info(f"Found valid fallback iteration {best_iteration['iteration']} from evolution history")
 
         # Calculate tokens from previous iterations
         total_tokens = 0
@@ -214,14 +230,19 @@ class SelfEvolve:
                         output = gen_result.output
                         break
             
-            # If we never got a valid output, skip this iteration entirely
+            # If we never got a valid output, implement continuation fallback strategy
             if not generation_successful:
                 logger.error(f"Skipping iteration {iteration} due to persistent invalid output after {max_retries_per_iteration + 1} attempts")
-                if best_iteration is not None:
-                    fallback_triggered = True
-                    break  # Exit the main while loop
-                else:
-                    raise Exception("No valid iteration found; marking task as failed.")
+                
+                if evolution_history:
+                    logger.warning("Using last valid evolution history as fallback for continuation.")
+                    last_valid = next((item for item in reversed(evolution_history) if self._is_valid_output(item["output"])), None)
+                    if last_valid:
+                        best_iteration = last_valid
+                        best_output = last_valid["output"]
+                        fallback_triggered = True
+                        break  # exit while loop gracefully
+                raise Exception("No valid iteration found; marking task as failed.")
 
             # Extract reasoning summary from generator
             generator_reasoning_summary = gen_result.metadata.get("reasoning_summary", "")
@@ -349,6 +370,11 @@ class SelfEvolve:
             logger.info("Self-Evolve cancelled before creating final solution")
             raise asyncio.CancelledError("Self-Evolve was cancelled")
 
+        # Check if evolution history is empty or NoneType access
+        if not evolution_history:
+            logger.error("Evolution history is missing.")
+            raise ValueError("Evolution history is required to generate a solution.")
+
         # Calculate actual completed iterations from evolution history
         completed_iterations = len(evolution_history)
         final_iteration = iteration - 1  # iteration is incremented after completion
@@ -375,9 +401,17 @@ class SelfEvolve:
             },
         )
         
-        # Add fallback metadata
+        # Add fallback metadata with diagnostic message
         solution.metadata["stop_reason"] = stop_reason
         solution.metadata["fallback_used"] = fallback_triggered
+        
+        # Add diagnostic message when fallback is used
+        if fallback_triggered and self.allow_continuation_fallback:
+            solution.metadata["fallback_diagnostic"] = (
+                f"Continuation fallback applied: returned iteration {final_iter['iteration']} "
+                f"due to invalid output in subsequent iterations. "
+                f"This ensures downstream consumers receive a valid response."
+            )
 
         logger.info(
             f"Self-Evolve complete. Converged: {should_stop}, "
@@ -451,6 +485,34 @@ class SelfEvolve:
             return False
             
         return True
+    
+    def _find_best_valid_iteration(self, evolution_history: list) -> Optional[Dict[str, Any]]:
+        """
+        Find the best valid iteration from evolution history for fallback.
+        
+        Strategy:
+        1. Prefer the most recent valid iteration (latest iteration with valid output)
+        2. Fallback to any valid iteration if none recent are valid
+        
+        Args:
+            evolution_history: List of iteration dictionaries
+            
+        Returns:
+            Best valid iteration dictionary, or None if no valid iterations found
+        """
+        if not evolution_history:
+            return None
+            
+        # First pass: look for valid iterations in reverse order (most recent first)
+        for iteration_data in reversed(evolution_history):
+            output = iteration_data.get("output", "")
+            if self._is_valid_output(output):
+                logger.debug(f"Found most recent valid iteration: {iteration_data['iteration']}")
+                return iteration_data
+        
+        # If no valid iterations found, return None
+        logger.warning("No valid iterations found in evolution history for fallback")
+        return None
     
     def get_config(self) -> Dict[str, Any]:
         """Get engine configuration."""
