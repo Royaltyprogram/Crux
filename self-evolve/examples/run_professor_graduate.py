@@ -14,9 +14,7 @@ def main():
     """Main execution function with enhanced error handling"""
     try:
         from ..examples.professor_graduate_example import (
-            professor_graduate_example, 
-            professor_graduate_example_simple,
-            test_responses_api_features
+            professor_graduate_example,
         )
         
         # Check for required environment variables
@@ -25,25 +23,6 @@ def main():
             print("Please set it with: export OPENAI_API_KEY='your-api-key'")
             sys.exit(1)
         
-        # Parse command line arguments
-        if len(sys.argv) > 1:
-            arg = sys.argv[1].lower()
-            
-            if arg == "--simple":
-                print("🚀 Running simple Professor + Graduate example...")
-                professor_graduate_example_simple()
-                
-            elif arg == "--test":
-                print("🧪 Testing Responses API features...")
-                test_responses_api_features()
-                
-            elif arg == "--help" or arg == "-h":
-                print_help()
-                
-            else:
-                print(f"❌ Unknown argument: {sys.argv[1]}")
-                print_help()
-                sys.exit(1)
         else:
             # Run full example
             print("🚀 Running full Professor + Graduate Self-Evolve System...")
@@ -76,9 +55,6 @@ Usage:
 
 Options:
     (none)     Run full example with o3 models (default)
-    --simple   Run simple example with gpt-4o models  
-    --test     Test Responses API features
-    --help     Show this help message
 
 Environment Variables:
     OPENAI_API_KEY       Required: Your OpenAI API key
