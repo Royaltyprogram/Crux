@@ -1,3 +1,28 @@
+## LMStudio Installation
+
+To install LMStudio, follow these steps:
+
+1. **Download LMStudio**: Visit the official LMStudio website and download the installer for your operating system.
+
+2. **Install LMStudio**: Run the installer and follow the on-screen instructions to complete the installation.
+
+3. **Verify Installation**: Open a terminal and type:
+
+   ```bash
+   lmstudio --version
+   ```
+   Ensure it correctly displays the version number.
+
+## Environment Variables
+
+- **LMSTUDIO_BASE_URL**: Set this environment variable if you wish to change the default server location.
+  
+  ```bash
+  export LMSTUDIO_BASE_URL=http://my-custom-server:port
+  ```
+  
+  If not set, the server must run on `localhost:1234`.
+
 # Crux Agent
 
 Production-ready FastAPI service implementing the Crux agent with Self-Evolve algorithm.
@@ -146,7 +171,7 @@ cp .env.example .env
 # Edit .env with your API keys and settings
 ```
 
-5. Run the application:
+5. **Start required services**:
 
 ```bash
 # Start Redis (required for Celery)
@@ -155,6 +180,15 @@ redis-server
 # macOS: brew install redis
 # Ubuntu: sudo apt-get install redis-server
 
+# Start LMStudio server (required for LLM operations)
+lmstudio server
+# Note: The server must run on localhost:1234 (default)
+# Or set LMSTUDIO_BASE_URL to your custom server location
+```
+
+6. **Run the application**:
+
+```bash
 # Start Celery worker
 python worker.py
 
@@ -162,7 +196,7 @@ python worker.py
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-6. (Optional) Run the frontend:
+7. (Optional) Run the frontend:
 
 ```bash
 # Navigate to frontend directory

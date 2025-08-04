@@ -144,6 +144,7 @@ The professor has determined that this specific task requires your expertise in 
                 "task": context.prompt,
                 "task_info": task_info,
                 "reasoning_summary": self.provider.get_last_reasoning_summary() if hasattr(self.provider, "get_last_reasoning_summary") else "",
+                "reasoning_tokens": self.provider.last_reasoning_tokens if hasattr(self.provider, "last_reasoning_tokens") else 0,
                 "original_problem": original_problem,
                 "professor_reasoning_context": professor_reasoning,
                 "problem_constraints": problem_constraints,

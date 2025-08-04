@@ -67,12 +67,15 @@ class GeneratorAgent(AbstractAgent):
             # Count tokens using provider's accurate tokenization
             tokens_used = self.provider.count_tokens(full_prompt + answer)
 
-            # Extract reasoning summary from provider (if any)
+            # Extract reasoning summary and tokens from provider (if any)
             reasoning_summary = ""
+            reasoning_tokens = 0
             if hasattr(self.provider, "get_last_reasoning_summary"):
                 reasoning_summary = self.provider.get_last_reasoning_summary()
+            if hasattr(self.provider, "last_reasoning_tokens"):
+                reasoning_tokens = self.provider.last_reasoning_tokens
 
-            logger.info(f"Answer generation complete, tokens: {tokens_used}")
+            logger.info(f"Answer generation complete, tokens: {tokens_used}, reasoning tokens: {reasoning_tokens}")
             
             return AgentResult(
                 output=answer,
@@ -82,6 +85,7 @@ class GeneratorAgent(AbstractAgent):
                     "context": problem_context,
                     "temperature": self.temperature,
                     "reasoning_summary": reasoning_summary,
+                    "reasoning_tokens": reasoning_tokens,
                 },
                 tokens_used=tokens_used,
             )

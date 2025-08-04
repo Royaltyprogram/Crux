@@ -56,6 +56,8 @@ class OpenAIProvider(BaseProvider):
         self.current_response_id: Optional[str] = None
         # Store accumulated reasoning summary parts for streaming
         self._reasoning_parts: List[str] = []
+        # Track reasoning tokens separately
+        self.last_reasoning_tokens: int = 0
     
     def _with_json_retry(self, fn, *args, **kwargs):
         """
@@ -231,10 +233,14 @@ class OpenAIProvider(BaseProvider):
                 error_msg = event.message
                 raise ProviderError(f"Stream error: {error_msg}")
         
-        # Store reasoning summary if collected
+        # Store reasoning summary if collected and calculate reasoning tokens
         if collect_reasoning and reasoning_summary_parts:
             self.last_reasoning_summary = "".join(reasoning_summary_parts)
-            logger.debug(f"Collected reasoning summary: {len(self.last_reasoning_summary)} chars")
+            # Calculate reasoning tokens
+            self.last_reasoning_tokens = self.count_tokens(self.last_reasoning_summary)
+            logger.debug(f"Collected reasoning summary: {len(self.last_reasoning_summary)} chars, {self.last_reasoning_tokens} tokens")
+        else:
+            self.last_reasoning_tokens = 0
         
         return content, response_id
     
@@ -382,6 +388,21 @@ class OpenAIProvider(BaseProvider):
                 if content is None:
                     raise ProviderError("Empty response from OpenAI")
                 
+                # Extract reasoning tokens if available
+                if hasattr(response, 'usage') and response.usage:
+                    usage = response.usage
+                    if hasattr(usage, 'completion_tokens_details') and usage.completion_tokens_details:
+                        details = usage.completion_tokens_details
+                        if hasattr(details, 'reasoning_tokens') and details.reasoning_tokens:
+                            self.last_reasoning_tokens = details.reasoning_tokens
+                            logger.debug(f"Extracted reasoning tokens: {self.last_reasoning_tokens}")
+                        else:
+                            self.last_reasoning_tokens = 0
+                    else:
+                        self.last_reasoning_tokens = 0
+                else:
+                    self.last_reasoning_tokens = 0
+                
                 logger.debug(f"OpenAI response received, tokens used: {response.usage}")
                 return content
             
@@ -435,11 +456,15 @@ class OpenAIProvider(BaseProvider):
             except Exception as e:
                 logger.debug(f"Failed to extract reasoning from top-level object: {e}")
         
-        # Store the reasoning summary
+        # Store the reasoning summary and calculate reasoning tokens
         self.last_reasoning_summary = "\n".join(reasoning_parts) if reasoning_parts else ""
         
         if self.last_reasoning_summary:
-            logger.debug(f"Extracted reasoning summary: {len(self.last_reasoning_summary)} chars")
+            # Calculate reasoning tokens
+            self.last_reasoning_tokens = self.count_tokens(self.last_reasoning_summary)
+            logger.debug(f"Extracted reasoning summary: {len(self.last_reasoning_summary)} chars, {self.last_reasoning_tokens} tokens")
+        else:
+            self.last_reasoning_tokens = 0
     
     async def _complete_with_functions_responses_api(
         self,

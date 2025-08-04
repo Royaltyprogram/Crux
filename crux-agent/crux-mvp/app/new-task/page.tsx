@@ -29,16 +29,16 @@ import { useTasks } from "@/hooks/use-tasks";
 
 export default function NewTaskPage() {
   const [topic, setTopic] = useState("");
-  const [mode, setMode] = useState<"basic" | "enhanced">("basic");
+  const [mode, setMode] = useState("basic" as "basic" | "enhanced");
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [settings, setSettings] = useState<SettingsResponse | null>(null);
+  const [error, setError] = useState(null as string | null);
+  const [settings, setSettings] = useState(null as SettingsResponse | null);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Override settings
-  const [maxIters, setMaxIters] = useState<string>("");
-  const [specialistMaxIters, setSpecialistMaxIters] = useState<string>("");
-  const [professorMaxIters, setProfessorMaxIters] = useState<string>("");
+  const [maxIters, setMaxIters] = useState("");
+  const [specialistMaxIters, setSpecialistMaxIters] = useState("");
+  const [professorMaxIters, setProfessorMaxIters] = useState("");
 
   const router = useRouter();
   const { addTask, startPolling } = useTasks();
@@ -49,6 +49,8 @@ export default function NewTaskPage() {
       try {
         const settingsData = await apiClient.getSettings();
         setSettings(settingsData);
+        // Debug: List LMStudio models
+        console.log("LMStudio models:", settingsData.lmstudio_models);
         // Set defaults from settings
         setMaxIters(settingsData.max_iters.toString());
         setSpecialistMaxIters(settingsData.specialist_max_iters.toString());
@@ -230,10 +232,14 @@ export default function NewTaskPage() {
               <Select
                 onValueChange={(value) => {
                   // When provider changes, update to the first available model for that provider
-                  const newModelName =
-                    value === "openai"
-                      ? settings.openai_models[0]
-                      : settings.openrouter_models[0];
+                  let newModelName;
+                  if (value === "openai") {
+                    newModelName = settings.openai_models[0];
+                  } else if (value === "openrouter") {
+                    newModelName = settings.openrouter_models[0];
+                  } else if (value === "lmstudio") {
+                    newModelName = settings.lmstudio_models[0];
+                  }
                   setSettings({
                     ...settings,
                     llm_provider: value,
@@ -271,7 +277,9 @@ export default function NewTaskPage() {
                 <SelectContent>
                   {(settings.llm_provider === "openai"
                     ? settings.openai_models
-                    : settings.openrouter_models
+                    : settings.llm_provider === "openrouter"
+                    ? settings.openrouter_models
+                    : settings.lmstudio_models
                   ).map((model) => (
                     <SelectItem key={model} value={model}>
                       {model}
@@ -285,7 +293,9 @@ export default function NewTaskPage() {
                 Available models for {settings.llm_provider}:{" "}
                 {(settings.llm_provider === "openai"
                   ? settings.openai_models
-                  : settings.openrouter_models
+                  : settings.llm_provider === "openrouter"
+                  ? settings.openrouter_models
+                  : settings.lmstudio_models
                 ).join(", ")}
               </div>
             </div>
@@ -504,3 +514,4 @@ export default function NewTaskPage() {
     </div>
   );
 }
+

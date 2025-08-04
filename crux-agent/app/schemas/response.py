@@ -138,9 +138,12 @@ class JobStatusResponse(BaseModel):
     progress: Optional[float] = Field(None, ge=0.0, le=1.0, description="Progress percentage")
     current_phase: Optional[str] = Field(None, description="Current processing phase")
     model_name: Optional[str] = Field(None, description="Model name used for this job")
+    provider_name: Optional[str] = Field(None, description="Provider name used for this job")
     result: Optional[SolutionResponse] = Field(None, description="Final result if completed")
     error: Optional[str] = Field(None, description="Error message if failed")
     partial_results: Optional[List[Dict[str, Any]]] = Field(None, description="Partial results if available")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional job metadata including question snippet")
+    job_params: Optional[Dict[str, Any]] = Field(None, description="Original job parameters including mode and runner for task mode detection")
     
     class Config:
         json_schema_extra = {

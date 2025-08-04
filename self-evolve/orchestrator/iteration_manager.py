@@ -69,14 +69,46 @@ class IterationManager:
         evaluator: EvaluatorModel,
         config: FrameworkConfig,
         use_ai_refiner: bool = True,
-        constraints: Optional[str] = None
+        constraints: Optional[str] = None,
+        max_context_tokens: Optional[int] = None,
+        enable_persistence: bool = False,
+        results_dir: Optional[str] = None
     ):
+        self.logger = get_logger(self.__class__.__name__)
         self.generator = generator
         self.evaluator = evaluator
         self.config = config
         self.constraints = constraints
         self.context_builder = ContextBuilder()
         self.context_enhancer = ContextEnhancer()
+        
+        # Persistence settings
+        self.enable_persistence = enable_persistence
+        self.results_dir = results_dir or "./tooliense/logs"
+        
+        # Context management settings - get provider-specific limits from environment
+        from app.settings import settings
+        
+        # Determine provider from generator model if possible
+        current_provider = settings.llm_provider
+        if hasattr(generator, 'config') and hasattr(generator.config, 'model_name'):
+            # Try to detect provider from model config
+            if 'gpt' in generator.config.model_name.lower() or 'o4' in generator.config.model_name.lower():
+                current_provider = 'openai'
+            elif 'deepseek' in generator.config.model_name.lower() or 'qwen' in generator.config.model_name.lower():
+                current_provider = 'openrouter'
+            elif hasattr(generator, 'provider') and 'lmstudio' in str(type(generator.provider)).lower():
+                current_provider = 'lmstudio'
+        
+        # Use provider-specific context limits
+        self.max_context_tokens = max_context_tokens or settings.get_context_limit(current_provider)
+        self.response_reserve = settings.response_reserve
+        self.summarization_threshold = settings.summarization_threshold
+        self.current_provider = current_provider
+        
+        self.logger.info(f"Context management initialized for {current_provider}: {self.max_context_tokens:,} tokens")
+        self.logger.info(f"Response reserve: {self.response_reserve:,} tokens, Summarization threshold: {self.summarization_threshold*100:.0f}%")
+        
         
         # Initialize prompt refiner
         if use_ai_refiner:
@@ -101,8 +133,6 @@ class IterationManager:
         else:
             # 규칙 기반 프롬프트 개선
             self.prompt_refiner = PromptRefiner()
-        
-        self.logger = get_logger(self.__class__.__name__)
     
     def run_iterative_improvement(
         self,
@@ -130,12 +160,10 @@ class IterationManager:
         for i in range(self.config.max_iterations):
             self.logger.info(f"Starting iteration {i + 1}")
             
-            # Build context from accumulated reasoning for Generator
-            reasoning_context = ""
-            if accumulated_reasoning:
-                reasoning_context = "\n\n---PREVIOUS REASONING CONTEXT---\n" + "\n\n".join(accumulated_reasoning)
+            # Build token-aware context from accumulated reasoning for Generator
+            reasoning_context = self._manage_context_size(current_question, accumulated_reasoning)
             
-            # Generate answer with current prompt and reasoning context
+            # Generate answer with current prompt and managed reasoning context
             if reasoning_context:
                 full_prompt = current_question + reasoning_context
             else:
@@ -267,17 +295,18 @@ class IterationManager:
                 "history": refinement_history
             }, ensure_ascii=False))
         
-        # Persist results under examples/results/{exec_id}/iteration{n}/qa.md
-        print("DEBUG: About to call _save_example_results")
-        try:
-            print("DEBUG: Entering _save_example_results try block")
-            self._save_example_results(session)
-            print("DEBUG: _save_example_results completed successfully")
-        except Exception as e:
-            print(f"DEBUG: Exception in _save_example_results: {e}")
-            self.logger.warning(f"Failed to save example results: {e}")
-        
-        print("DEBUG: Returning session")
+        # Persist results if enabled
+        if self.enable_persistence:
+            self.logger.info("About to call _save_example_results")
+            try:
+                self.logger.info("Entering _save_example_results try block")
+                self._save_example_results(session)
+                self.logger.info("_save_example_results completed successfully")
+            except Exception as e:
+                self.logger.error(f"Exception in _save_example_results: {e}")
+                self.logger.warning(f"Failed to save example results: {e}")
+        else:
+            self.logger.debug("Persistence disabled, skipping _save_example_results")
         return session
     
     def _extract_answer_value(self, answer: str) -> Optional[str]:
@@ -287,6 +316,252 @@ class IterationManager:
         if match:
             return match.group(1).strip()
         return None
+    
+    def _count_tokens(self, text: str) -> int:
+        """Count tokens in text using the generator's token counter."""
+        try:
+            # Use the generator's token counting method
+            if hasattr(self.generator, 'count_tokens'):
+                return self.generator.count_tokens(text)
+            elif hasattr(self.generator, 'provider') and hasattr(self.generator.provider, 'count_tokens'):
+                return self.generator.provider.count_tokens(text)
+            else:
+                # Fallback: rough estimation (4 chars per token)
+                return len(text) // 4
+        except Exception as e:
+            self.logger.warning(f"Token counting failed, using fallback: {e}")
+            return len(text) // 4
+    
+    def _manage_context_size(self, base_prompt: str, accumulated_reasoning: List[str]) -> str:
+        """Intelligently manage context size using LLM-based summarization when needed.
+        
+        Strategy:
+        1. Calculate total context size
+        2. If approaching limit (80%), trigger LLM summarization
+        3. Always keep the most recent reasoning intact
+        4. Summarize older reasoning to compress context
+        
+        Args:
+            base_prompt: The core prompt (question + current refinements)
+            accumulated_reasoning: List of reasoning summaries to potentially include
+            
+        Returns:
+            Context string that fits within token limits
+        """
+        if not accumulated_reasoning:
+            return ""
+        
+        # Count tokens in base prompt (this must always be included)
+        base_tokens = self._count_tokens(base_prompt)
+        available_tokens = self.max_context_tokens - base_tokens - self.response_reserve
+        
+        if available_tokens <= 0:
+            self.logger.warning(
+                f"Base prompt ({base_tokens} tokens) exceeds context limit. "
+                f"Context limit: {self.max_context_tokens}, reserved for response: {self.response_reserve}"
+            )
+            return ""  # No room for additional context
+        
+        # Build full context and check if summarization is needed
+        full_context = "\n\n".join(accumulated_reasoning)
+        full_context_tokens = self._count_tokens(full_context)
+        
+        # If context fits comfortably, use it as-is
+        if full_context_tokens <= available_tokens:
+            context_usage = full_context_tokens / available_tokens
+            if context_usage > self.summarization_threshold:
+                self.logger.info(
+                    f"Context usage high: {full_context_tokens}/{available_tokens} tokens ({context_usage*100:.1f}%) - consider summarization"
+                )
+            return "\n\n---PREVIOUS REASONING CONTEXT---\n" + full_context
+        
+        # Context is too large - need intelligent management
+        self.logger.info(
+            f"Context too large: {full_context_tokens}/{available_tokens} tokens. Applying intelligent summarization..."
+        )
+        
+        # Strategy: Keep most recent reasoning intact, summarize older ones
+        if len(accumulated_reasoning) == 1:
+            # Only one reasoning - either summarize it or truncate
+            return self._handle_single_large_reasoning(accumulated_reasoning[0], available_tokens)
+        
+        # Multiple reasoning summaries - keep recent, summarize old
+        return self._handle_multiple_reasoning(accumulated_reasoning, available_tokens)
+    
+    def _handle_single_large_reasoning(self, reasoning: str, available_tokens: int) -> str:
+        """Handle a single large reasoning that exceeds available tokens."""
+        reasoning_tokens = self._count_tokens(reasoning)
+        
+        # If it's moderately over the limit, try LLM summarization
+        if reasoning_tokens <= available_tokens * 2:  # Within 2x limit
+            target_tokens = int(available_tokens * 0.9)  # Target 90% of available
+            summarized = self._summarize_reasoning_with_llm(reasoning, target_tokens)
+            
+            if summarized and self._count_tokens(summarized) <= available_tokens:
+                self.logger.info(
+                    f"LLM summarization: {reasoning_tokens} -> {self._count_tokens(summarized)} tokens"
+                )
+                return "\n\n---PREVIOUS REASONING CONTEXT (SUMMARIZED)---\n" + summarized
+        
+        # Fallback to truncation if summarization fails or reasoning is too large
+        self.logger.warning("Falling back to truncation for single large reasoning")
+        truncated = self._truncate_reasoning(reasoning, available_tokens)
+        final_tokens = self._count_tokens(truncated)
+        self.logger.info(f"Truncation applied: {reasoning_tokens} -> {final_tokens} tokens")
+        return "\n\n---PREVIOUS REASONING CONTEXT (TRUNCATED)---\n" + truncated
+    
+    def _handle_multiple_reasoning(self, accumulated_reasoning: List[str], available_tokens: int) -> str:
+        """Handle multiple reasoning summaries that collectively exceed available tokens."""
+        # Always keep the most recent reasoning intact if possible
+        most_recent = accumulated_reasoning[-1]
+        most_recent_tokens = self._count_tokens(most_recent)
+        
+        # Reserve space for the most recent reasoning
+        remaining_tokens = available_tokens - most_recent_tokens
+        
+        if remaining_tokens <= 0:
+            # Even the most recent reasoning is too large
+            self.logger.warning("Most recent reasoning alone exceeds available tokens")
+            return self._handle_single_large_reasoning(most_recent, available_tokens)
+        
+        # Summarize older reasoning to fit in remaining space
+        older_reasoning = accumulated_reasoning[:-1]  # All except the most recent
+        
+        if not older_reasoning:
+            # Only one reasoning (the most recent)
+            return "\n\n---PREVIOUS REASONING CONTEXT---\n" + most_recent
+        
+        # Try to fit older reasoning through summarization
+        older_combined = "\n\n".join(older_reasoning)
+        older_tokens = self._count_tokens(older_combined)
+        
+        if older_tokens <= remaining_tokens:
+            # Older reasoning fits - use everything as-is
+            return "\n\n---PREVIOUS REASONING CONTEXT---\n" + "\n\n".join(accumulated_reasoning)
+        
+        # Need to summarize older reasoning
+        target_tokens = int(remaining_tokens * 0.8)  # Use 80% of remaining space
+        summarized_older = self._summarize_reasoning_with_llm(older_combined, target_tokens)
+        
+        if summarized_older and self._count_tokens(summarized_older) <= remaining_tokens:
+            self.logger.info(
+                f"LLM summarized older reasoning: {older_tokens} -> {self._count_tokens(summarized_older)} tokens"
+            )
+            context_parts = [summarized_older, most_recent]
+            return "\n\n---PREVIOUS REASONING CONTEXT (OLDER SUMMARIZED)---\n" + "\n\n".join(context_parts)
+        
+        # Summarization failed - use rolling window fallback
+        self.logger.warning("LLM summarization failed, using rolling window fallback")
+        return "\n\n---PREVIOUS REASONING CONTEXT (RECENT ONLY)---\n" + most_recent
+    
+    def _summarize_reasoning_with_llm(self, reasoning_text: str, target_tokens: int) -> Optional[str]:
+        """Use LLM to intelligently summarize reasoning context.
+        
+        Uses a single, effective summarization prompt that typically achieves good compression
+        without the complexity of multiple passes.
+        
+        Args:
+            reasoning_text: The reasoning text to summarize
+            target_tokens: Target token count for the summary
+            
+        Returns:
+            Summarized text, or None if summarization fails
+        """
+        current_tokens = self._count_tokens(reasoning_text)
+        
+        # If already fits, no need to summarize
+        if current_tokens <= target_tokens:
+            return reasoning_text
+        
+        # Single effective summarization prompt
+        summarization_prompt = """Create a concise summary, focusing on key insights and main conclusions. Remove verbose explanations but keep important details.
+
+Reasoning to summarize:
+{reasoning_text}
+
+Summary:""".format(reasoning_text=reasoning_text)
+        
+        try:
+            # Generate summary with focused temperature for consistency
+            summary = self.generator.generate(summarization_prompt, temperature=0.2, stream=False)
+            
+            if not summary or len(summary.strip()) < 30:
+                self.logger.warning("LLM summarization produced empty or too short result")
+                return None
+            
+            summary = summary.strip()
+            summary_tokens = self._count_tokens(summary)
+            
+            # Check if summarization achieved meaningful compression
+            if summary_tokens >= current_tokens * 0.90:  # Less than 10% compression
+                self.logger.warning(f"LLM summarization ineffective: {current_tokens} -> {summary_tokens} tokens")
+                return None
+            
+            # Log the compression achieved
+            compression_ratio = summary_tokens / current_tokens
+            self.logger.info(f"LLM summarization: {current_tokens} -> {summary_tokens} tokens ({compression_ratio:.1%})")
+            
+            # Return the summary whether it fits perfectly or not - let caller decide
+            return summary
+            
+        except Exception as e:
+            self.logger.error(f"LLM summarization failed: {e}")
+            return None
+    
+    def _truncate_reasoning(self, reasoning: str, max_tokens: int) -> str:
+        """Truncate a reasoning summary to fit within token limits.
+        
+        Strategy: Keep the beginning and end, drop the middle.
+        This preserves the setup and conclusion while dropping detailed steps.
+        
+        Args:
+            reasoning: Original reasoning text
+            max_tokens: Maximum tokens allowed
+            
+        Returns:
+            Truncated reasoning text that fits within max_tokens
+        """
+        current_tokens = self._count_tokens(reasoning)
+        if current_tokens <= max_tokens:
+            return reasoning
+        
+        # Split into lines for better truncation
+        lines = reasoning.split('\n')
+        
+        # Keep first 30% and last 30% of lines, drop middle 40%
+        total_lines = len(lines)
+        keep_start = max(1, int(total_lines * 0.3))
+        keep_end = max(1, int(total_lines * 0.3))
+        
+        if keep_start + keep_end >= total_lines:
+            # If too few lines, just truncate by characters
+            target_chars = int(len(reasoning) * (max_tokens / current_tokens))
+            return reasoning[:target_chars] + "\n\n[... reasoning truncated for context management ...]\n\n" + reasoning[-target_chars//4:]
+        
+        # Reconstruct with beginning and end
+        truncated_lines = (
+            lines[:keep_start] + 
+            ["\n[... middle reasoning truncated for context management ...]\n"] +
+            lines[-keep_end:]
+        )
+        
+        truncated = '\n'.join(truncated_lines)
+        
+        # Check if it fits, if not, do character-based truncation
+        if self._count_tokens(truncated) > max_tokens:
+            self.logger.debug("Line-based truncation still too large, applying character-based truncation")
+            target_chars = int(len(reasoning) * (max_tokens / current_tokens) * 0.9)  # 90% to be safe
+            keep_start_chars = target_chars // 2
+            keep_end_chars = target_chars // 4
+            truncated = (
+                reasoning[:keep_start_chars] + 
+                "\n\n[... reasoning truncated for context management ...]\n\n" +
+                reasoning[-keep_end_chars:]
+            )
+            final_tokens = self._count_tokens(truncated)
+            self.logger.debug(f"Character-based truncation: {current_tokens} -> {final_tokens} tokens")
+        
+        return truncated
     
     def _save_example_results(self, session: "IterationSession") -> None:
         """Save per-iteration Q&A pairs into the examples/logs folder.
@@ -298,37 +573,36 @@ class IterationManager:
                 iteration2/qa.md
                 ...
         """
-        print("DEBUG: _save_example_results function entered")
-        print(f"DEBUG: Session has {len(session.iterations)} iterations")
+        self.logger.debug("_save_example_results function entered")
+        self.logger.debug(f"Session has {len(session.iterations)} iterations")
         
-        # Use the same path as tooliense.examples.logs
-        results_root = "./tooliense/logs"
-        print(f"DEBUG: results_root = {results_root}")
+        # Use configured results directory
+        results_root = self.results_dir
+        self.logger.debug(f"results_root = {results_root}")
         
-        print("DEBUG: Creating directories")
+        self.logger.debug("Creating directories")
         os.makedirs(results_root, exist_ok=True)
-        print(f"DEBUG: Directory created successfully: {results_root}")
-        print(results_root)
-
+        self.logger.debug(f"Directory created successfully: {results_root}")
+        
         # Execution identifier (timestamp-based)
         exec_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        print(f"DEBUG: exec_id = {exec_id}")
+        self.logger.debug(f"exec_id = {exec_id}")
         
         exec_dir = os.path.join(results_root, exec_id)
-        print(f"DEBUG: exec_dir = {exec_dir}")
+        self.logger.debug(f"exec_dir = {exec_dir}")
         
         os.makedirs(exec_dir, exist_ok=True)
-        print(f"DEBUG: Created exec_dir successfully")
+        self.logger.debug(f"Created exec_dir successfully")
 
         # Save each iteration
-        print(f"DEBUG: Starting to save {len(session.iterations)} iterations")
+        self.logger.debug(f"Starting to save {len(session.iterations)} iterations")
         for it in session.iterations:
-            print(f"DEBUG: Processing iteration {it.iteration}")
+            self.logger.debug(f"Processing iteration {it.iteration}")
             iter_dir = os.path.join(exec_dir, f"iteration{it.iteration}")
-            print(f"DEBUG: iter_dir = {iter_dir}")
+            self.logger.debug(f"iter_dir = {iter_dir}")
             
             os.makedirs(iter_dir, exist_ok=True)
-            print(f"DEBUG: Created iter_dir successfully")
+            self.logger.debug(f"Created iter_dir successfully")
             
             md_content = f"# Iteration {it.iteration}\n\n"
             md_content += "## Question (Refined)\n\n"
@@ -349,17 +623,17 @@ class IterationManager:
 
             # Save to file
             md_path = os.path.join(iter_dir, "qa.md")
-            print(f"DEBUG: md_path = {md_path}")
+            self.logger.debug(f"md_path = {md_path}")
 
-            print(f"DEBUG: Writing to file: {md_path}")
+            self.logger.debug(f"Writing to file: {md_path}")
             with open(md_path, "w", encoding="utf-8") as f:
                 f.write(md_content)
-            print(f"DEBUG: Successfully wrote iteration {it.iteration} file")
+            self.logger.debug(f"Successfully wrote iteration {it.iteration} file")
 
         # Save final answer summary
-        print("DEBUG: Saving final answer summary")
+        self.logger.debug("Saving final answer summary")
         final_md_path = os.path.join(exec_dir, "final_answer.md")
-        print(f"DEBUG: final_md_path = {final_md_path}")
+        self.logger.debug(f"final_md_path = {final_md_path}")
         
         with open(final_md_path, "w", encoding="utf-8") as f:
             f.write("# Final Answer\n\n")
@@ -368,5 +642,5 @@ class IterationManager:
             f.write("\n```)\n\n")
             f.write(f"_Total iterations_: {session.total_iterations}\n")
         
-        print("DEBUG: Successfully wrote final_answer.md")
-        print("DEBUG: _save_example_results function completed successfully") 
+        self.logger.debug("Successfully wrote final_answer.md")
+        self.logger.debug("_save_example_results function completed successfully")

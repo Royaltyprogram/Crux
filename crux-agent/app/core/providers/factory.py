@@ -6,6 +6,7 @@ from typing import Optional
 from app.core.providers.base import BaseProvider
 from app.core.providers.openai import OpenAIProvider
 from app.core.providers.openrouter import OpenRouterProvider
+from app.core.providers.lmstudio import LMStudioProvider
 from app.settings import settings
 
 
@@ -50,6 +51,32 @@ def create_provider(
             max_retries=settings.openrouter_max_retries,
             app_name=settings.app_name,
         )
+    elif provider_name == "lmstudio":
+        # Get the API key from parameters or settings
+        # If api_key is explicitly passed (including empty string), use it
+        if api_key is not None:
+            final_api_key = api_key
+        else:
+            final_api_key = settings.lmstudio_api_key.get_secret_value() if settings.lmstudio_api_key else None
+        
+        # For LMStudio, allow empty key when host is localhost (local instances often don't require keys)
+        # Check if we're connecting to localhost by examining the base_url from settings
+        base_url = f"{settings.lmstudio_base_url}/v1/chat/completions"
+        is_localhost = "localhost" in settings.lmstudio_base_url or "127.0.0.1" in settings.lmstudio_base_url
+        
+        # Raise error if key is missing and not connecting to localhost
+        # Only raise error if api_key was not explicitly provided and no key configured
+        # Allow empty API key if explicitly provided (for no-auth servers)
+        if final_api_key is None and not is_localhost and api_key is None:
+            raise ValueError("LMStudio API key not configured")
+        
+        return LMStudioProvider(
+            api_key=final_api_key or "",  # Use empty string for localhost when no key provided
+            model=model or settings.model_lmstudio,
+            timeout=settings.lmstudio_timeout,
+            max_retries=settings.lmstudio_max_retries,
+            base_url=base_url,
+        )
     else:
         raise ValueError(f"Unknown provider: {provider_name}")
 
@@ -59,5 +86,6 @@ __all__ = [
     "BaseProvider",
     "OpenAIProvider", 
     "OpenRouterProvider",
+    "LMStudioProvider",
     "create_provider",
-] 
+]

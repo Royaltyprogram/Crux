@@ -65,6 +65,7 @@ async def solve_basic(
             "request": json.dumps(request.model_dump()),
             "mode": "basic",
             "model_name": request.model_name or provider.model,
+            "provider_name": request.llm_provider or settings.llm_provider,
         }
         await redis_client.hset(f"job:{job_id}", mapping=job_data)
         # TESTING MODE: Extended TTL to prevent automatic deletion during testing
@@ -155,6 +156,7 @@ async def solve_enhanced(
             "request": json.dumps(request.model_dump()),
             "mode": "enhanced",
             "model_name": request.model_name or provider.model,
+            "provider_name": request.llm_provider or settings.llm_provider,
         }
         await redis_client.hset(f"job:{job_id}", mapping=job_data)
         # TESTING MODE: Extended TTL to prevent automatic deletion during testing
