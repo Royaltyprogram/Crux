@@ -259,8 +259,14 @@ class LMStudioProvider(BaseProvider):
                     logger.error(f"Invalid response structure. Keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}, Choices: {data.get('choices', 'MISSING')}")
                     raise ProviderError("Invalid response format from LMStudio")
                 
-                message = data["choices"][0]["message"]
+                message_dict = data["choices"][0]
+                message = message_dict["message"]
                 content = message.get("content", "")
+
+                # Capture finish_reason to set truncation flag
+                finish_reason = message_dict.get("finish_reason")
+                truncated = finish_reason and finish_reason.lower() not in ("stop", "eosfound")
+                self.last_truncated = truncated
                 
                 # Handle reasoning content if available (LMStudio reasoning separation feature)
                 reasoning_content = message.get("reasoning_content", "")
@@ -271,8 +277,18 @@ class LMStudioProvider(BaseProvider):
                     self.last_reasoning_tokens = self.count_tokens(reasoning_content)
                     logger.debug(f"Captured reasoning content: {len(reasoning_content)} chars, {self.last_reasoning_tokens} tokens")
                 else:
-                    self.last_reasoning_summary = ""
-                    self.last_reasoning_tokens = 0
+                    # Fallback: extract reasoning from <think>, <thinking>, or <reasoning> tags
+                    import re
+                    tag_pattern = re.compile(r"<(?:think|thinking|reasoning)[^>]*>(.*?)</(?:think|thinking|reasoning)>", re.IGNORECASE | re.DOTALL)
+                    matches = tag_pattern.findall(content or "")
+                    if matches:
+                        extracted = "\n".join(m.strip() for m in matches)
+                        self.last_reasoning_summary = extracted
+                        self.last_reasoning_tokens = self.count_tokens(extracted)
+                        logger.debug(f"Extracted reasoning from tags: {self.last_reasoning_tokens} tokens")
+                    else:
+                        self.last_reasoning_summary = ""
+                        self.last_reasoning_tokens = 0
                 
                 # Extract reasoning tokens from usage if available (alternative approach)
                 if "usage" in data:
@@ -309,6 +325,168 @@ class LMStudioProvider(BaseProvider):
             logger.error(f"LMStudio API error: {e}")
             raise ProviderError(f"LMStudio API error: {str(e)}") from e
     
+    async def complete_with_functions(
+        self,
+        *,
+        prompt: str,
+        functions: List[Dict[str, Any]],
+        temperature: float = 0.7,
+        max_tokens: Optional[int] = None,
+        system_prompt: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Any:
+        """
+        Generate a response with tool/function calling using LMStudio's OpenAI-compatible API.
+        Mirrors OpenAI-style tools/tool_calls format so ProfessorAgent and others can use specialists.
+        """
+        try:
+            # Build messages
+            messages: List[Dict[str, Any]] = []
+            if system_prompt:
+                messages.append({"role": "system", "content": system_prompt})
+            messages.append({"role": "user", "content": prompt})
+
+            # OpenAI-compatible tools payload
+            tools_payload = [{"type": "function", "function": func} for func in functions]
+
+            payload: Dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": temperature,
+                "tools": tools_payload,
+                "tool_choice": "auto",
+                "stream": False,
+            }
+            if max_tokens:
+                payload["max_tokens"] = max_tokens
+            payload.update(kwargs)
+
+            response = await self._make_request(
+                "POST",
+                self.base_url,
+                json=payload,
+                headers=self._get_headers(),
+            )
+
+            def parse_function_response(resp):
+                data = resp.json()
+                if "choices" not in data or not data["choices"]:
+                    # Check for error shape
+                    if isinstance(data, dict) and "error" in data:
+                        err = data["error"]
+                        err_msg = err if isinstance(err, str) else err.get("message", str(err))
+                        raise ProviderError(f"LMStudio API error: {err_msg}")
+                    raise ProviderError("Invalid response format from LMStudio")
+
+                choice = data["choices"][0]
+                message = choice.get("message", {})
+                content = message.get("content", "") or ""
+
+                # Reasoning capture: prefer explicit reasoning_content, else fallback to tags
+                self.last_reasoning_summary = ""
+                self.last_reasoning_tokens = 0
+
+                reasoning_content = message.get("reasoning_content", "")
+                if isinstance(reasoning_content, str) and reasoning_content.strip():
+                    self.last_reasoning_summary = reasoning_content
+                    self.last_reasoning_tokens = self.count_tokens(reasoning_content)
+                else:
+                    # Fallback: extract from <think>/<thinking>/<reasoning> tags in content
+                    import re
+                    tag_pattern = re.compile(r"<(?:think|thinking|reasoning)[^>]*>(.*?)</(?:think|thinking|reasoning)>", re.IGNORECASE | re.DOTALL)
+                    matches = tag_pattern.findall(content or "")
+                    if matches:
+                        extracted = "\n".join(m.strip() for m in matches)
+                        self.last_reasoning_summary = extracted
+                        self.last_reasoning_tokens = self.count_tokens(extracted)
+
+                # Also consider usage metadata if present
+                usage = data.get("usage")
+                if isinstance(usage, dict):
+                    if "reasoning_tokens" in usage:
+                        self.last_reasoning_tokens = usage["reasoning_tokens"]
+                    elif "completion_tokens_details" in usage and isinstance(usage["completion_tokens_details"], dict):
+                        det = usage["completion_tokens_details"]
+                        if "reasoning_tokens" in det:
+                            self.last_reasoning_tokens = det["reasoning_tokens"]
+
+                # Build function call response objects
+                class FunctionCall:
+                    def __init__(self, name: str, arguments: Any):
+                        self.name = name
+                        self.arguments = arguments
+
+                class FunctionResponse:
+                    def __init__(self, content: str, function_calls: List[Any]):
+                        self.content = content
+                        self.function_calls = function_calls
+
+                function_calls: List[Any] = []
+
+                # New tool_calls format
+                if message.get("tool_calls"):
+                    for tool_call in message["tool_calls"]:
+                        if isinstance(tool_call, dict) and tool_call.get("type") == "function" and tool_call.get("function"):
+                            fn = tool_call["function"]
+                            name = fn.get("name") if isinstance(fn, dict) else None
+                            raw_args = fn.get("arguments", {}) if isinstance(fn, dict) else {}
+
+                            parsed_args: Dict[str, Any] = {}
+                            if isinstance(raw_args, str):
+                                try:
+                                    parsed_args = self._with_json_retry(json.loads, raw_args)
+                                except Exception:
+                                    parsed_args = {}
+                            elif isinstance(raw_args, dict):
+                                parsed_args = raw_args
+
+                            if name:
+                                function_calls.append(FunctionCall(name=name, arguments=parsed_args))
+
+                # Legacy function_call format
+                elif message.get("function_call"):
+                    fc = message["function_call"]
+                    if isinstance(fc, dict):
+                        name = fc.get("name")
+                        raw_args = fc.get("arguments", {})
+                        parsed_args: Dict[str, Any] = {}
+                        if isinstance(raw_args, str):
+                            try:
+                                parsed_args = self._with_json_retry(json.loads, raw_args)
+                            except Exception:
+                                parsed_args = {}
+                        elif isinstance(raw_args, dict):
+                            parsed_args = raw_args
+                        if name:
+                            function_calls.append(FunctionCall(name=name, arguments=parsed_args))
+
+                return FunctionResponse(content=content, function_calls=function_calls)
+
+            # Use resilient JSON parsing wrapper
+            return self._with_json_retry(parse_function_response, response)
+
+        except Exception as e:
+            logger.error(f"LMStudio function-calling error: {e}")
+            # Fallback: try regular completion and return with no function calls
+            try:
+                text = await self.complete(
+                    prompt=prompt,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    system_prompt=system_prompt,
+                    stream=False,
+                    **kwargs,
+                )
+
+                class FunctionResponseFallback:
+                    def __init__(self, content: str):
+                        self.content = content
+                        self.function_calls = []
+
+                return FunctionResponseFallback(content=text)
+            except Exception:
+                raise ProviderError(f"LMStudio function-calling error: {str(e)}") from e
+
     async def _complete_with_sdk(
         self,
         *,
@@ -384,8 +562,18 @@ class LMStudioProvider(BaseProvider):
                     self.last_reasoning_tokens = self.count_tokens(reasoning_content)
                     logger.debug(f"Captured reasoning content via SDK: {len(reasoning_content)} chars, {self.last_reasoning_tokens} tokens")
                 else:
-                    self.last_reasoning_summary = ""
-                    self.last_reasoning_tokens = 0
+                    # Fallback: extract reasoning from <think>, <thinking>, or <reasoning> tags
+                    import re
+                    tag_pattern = re.compile(r"<(?:think|thinking|reasoning)[^>]*>(.*?)</(?:think|thinking|reasoning)>", re.IGNORECASE | re.DOTALL)
+                    matches = tag_pattern.findall(content or "")
+                    if matches:
+                        extracted = "\n".join(m.strip() for m in matches)
+                        self.last_reasoning_summary = extracted
+                        self.last_reasoning_tokens = self.count_tokens(extracted)
+                        logger.debug(f"Extracted reasoning from tags: {self.last_reasoning_tokens} tokens")
+                    else:
+                        self.last_reasoning_summary = ""
+                        self.last_reasoning_tokens = 0
                 
                 # Extract reasoning tokens from usage if available (SDK path)
                 usage = getattr(response, 'usage', None)
@@ -445,7 +633,12 @@ class LMStudioProvider(BaseProvider):
                         if "choices" in data and data["choices"]:
                             delta = data["choices"][0].get("delta", {})
                             if "content" in delta and delta["content"]:
-                                content += delta["content"]
+                                content += delta.get("content", "")
+                            # Track finish_reason if present (end of stream chunk)
+                            if "finish_reason" in data["choices"][0]:
+                                finish_reason_stream = data["choices"][0]["finish_reason"]
+                                if finish_reason_stream:
+                                    last_finish_reason = finish_reason_stream
                     except json.JSONDecodeError:
                         # Skip invalid JSON lines
                         continue
@@ -453,6 +646,15 @@ class LMStudioProvider(BaseProvider):
             if not content:
                 raise ProviderError("Empty streaming response from LMStudio")
             
+            # Attempt fallback extraction from <think>/<thinking>/<reasoning> tags inside streamed content
+            import re
+            tag_pattern = re.compile(r"<(?:think|thinking|reasoning)[^>]*>(.*?)</(?:think|thinking|reasoning)>", re.IGNORECASE | re.DOTALL)
+            matches = tag_pattern.findall(content or "")
+            if matches:
+                extracted = "\n".join(m.strip() for m in matches)
+                self.last_reasoning_summary = extracted
+                self.last_reasoning_tokens = self.count_tokens(extracted)
+                logger.debug(f"Extracted reasoning from tags (stream): {self.last_reasoning_tokens} tokens")
             logger.debug(f"LMStudio streaming completed, response length: {len(content)}")
             return content
             

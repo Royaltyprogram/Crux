@@ -236,8 +236,28 @@ interface TaskMetadata {
 
 export default function TaskDetailPage() {
   const params = useParams();
+  const [cancelling, setCancelling] = useState(false);
   const router = useRouter();
-  const { tasks, refreshTasks, fetchFullTaskDetails } = useTasks();
+
+  const handleCancelTask = async (taskId: string) => {
+    if (cancelling) return;
+    setCancelling(true);
+    // Attempt backend cancel but proceed regardless of outcome
+    try {
+      await cancelTask(taskId);
+    } catch (_) {/* ignore */}
+
+    // Always attempt purge locally (will also hit backend purge endpoint)
+    try {
+      await purgeTask(taskId);
+    } catch (_) {/* ignore */}
+
+    toast.success("Task removed");
+    router.push("/dashboard");
+
+    setCancelling(false);
+  };
+  const { tasks, cancelTask, purgeTask, refreshTasks, fetchFullTaskDetails } = useTasks();
   const [loading, setLoading] = useState(true);
   const [continuing, setContinuing] = useState(false);
   const [fullTask, setFullTask] = useState<Task | null>(null);
@@ -816,6 +836,14 @@ export default function TaskDetailPage() {
                   Back to Dashboard
                 </Button>
               </Link>
+              <Button
+                onClick={() => handleCancelTask(task.id)}
+                disabled={cancelling}
+                variant="outline"
+                className="font-mono border-red-300 text-red-600 hover:bg-red-600 hover:text-white px-6 py-2 text-sm bg-transparent"
+              >
+                {cancelling ? "Cancelling..." : "Cancel Task"}
+              </Button>
             </div>
           </main>
         </div>
@@ -989,6 +1017,14 @@ export default function TaskDetailPage() {
                 Start New Research
               </Button>
             </Link>
+            <Button
+              onClick={() => handleCancelTask(task.id)}
+              disabled={cancelling}
+              variant="outline"
+              className="font-mono border-red-300 text-red-600 hover:bg-red-600 hover:text-white px-6 py-2 text-sm bg-transparent"
+            >
+              {cancelling ? "Cancelling..." : "Cancel Task"}
+            </Button>
           </div>
         </main>
       </div>

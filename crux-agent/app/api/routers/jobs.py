@@ -350,6 +350,56 @@ async def cancel_job(
         )
 
 
+@router.delete("/{job_id}/purge")
+async def purge_job(
+    job_id: Annotated[str, Path(description="Job ID to purge")],
+    celery_app: Annotated[Celery, Depends(get_celery)],
+    redis_client: Annotated[redis.Redis, Depends(get_redis)] = None,
+) -> dict:
+    """
+    Permanently delete a job and all of its data from Redis.
+
+    If the job is still running, revoke the underlying Celery task first. After
+    purging, the job will no longer appear in the dashboard.
+    """
+    logger.info(f"Purging job: {job_id}")
+
+    try:
+        # Ensure job exists
+        exists = await redis_client.exists(f"job:{job_id}")
+        if not exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Job {job_id} not found",
+            )
+
+        # Revoke if still running
+        current_status = await redis_client.hget(f"job:{job_id}", "status")
+        current_status = current_status.decode() if current_status else None
+        if current_status in [JobStatus.PENDING.value, JobStatus.RUNNING.value]:
+            try:
+                celery_app.control.revoke(job_id, terminate=True, signal="SIGKILL")
+                logger.info(f"Celery task revoked for purge: {job_id}")
+            except Exception as revoke_err:
+                logger.warning(f"Failed to revoke Celery task {job_id}: {revoke_err}")
+
+        # Delete Redis key entirely
+        await redis_client.delete(f"job:{job_id}")
+
+        return {
+            "job_id": job_id,
+            "status": "purged",
+            "message": "Job and all associated data removed",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error purging job: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to purge job: {str(e)}",
+        )
+
 @router.get("/config/context-limits")
 async def get_context_limits() -> dict:
     """
