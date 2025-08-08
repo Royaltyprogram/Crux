@@ -53,6 +53,12 @@ class EnhancedRunner:
         
         # Create Professor (always uses Quality-First approach)
         self.professor = ProfessorAgent(provider=provider)
+        # Propagate specialist iteration limit so Professor honors request overrides
+        try:
+            setattr(self.professor, 'specialist_max_iters', self.max_iters_per_specialist)
+        except Exception:
+            # Best-effort; fallback to Professor default if attribute cannot be set
+            pass
         
         # Create shared evaluator and refiner for specialists
         self.evaluator = EvaluatorAgent(provider=provider)
@@ -126,7 +132,9 @@ class EnhancedRunner:
             if self._cancelled:
                 return
             iter_progress = (current_iter - 1) / max_iters if max_iters > 0 else 0
-            update_phase_progress(iter_progress, f"Professor analysis: {phase}")
+            # Stream latest known reasoning tokens (from last completed generation)
+            reasoning_tokens = getattr(self.professor, 'last_reasoning_tokens', 0)
+            update_phase_progress(iter_progress, f"Professor analysis: {phase}", reasoning_tokens)
         
         # Create Professor's Self-Evolve engine with progress callback
         professor_engine = SelfEvolve(

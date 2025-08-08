@@ -297,6 +297,22 @@ export function useTasks() {
     }
   }, []);
 
+  // Purge/delete task
+  const purgeTask = useCallback(async (taskId: string) => {
+    // Optimistically remove from local state/storage first
+    setTasks((prevTasks) => {
+      const updatedTasks = prevTasks.filter((task) => task.id !== taskId);
+      return safelySetTasks(updatedTasks);
+    });
+
+    try {
+      await apiClient.purgeJob(taskId);
+    } catch (err) {
+      // If backend returns 404 or other error, we keep local removal
+      console.warn("purgeJob backend error ignored:", err);
+    }
+  }, []);
+
   // Fetch full task details on demand (for individual task view)
   const fetchFullTaskDetails = useCallback(async (taskId: string): Promise<Task | null> => {
     try {
@@ -361,6 +377,7 @@ export function useTasks() {
     cancelTask,
     refreshTasks: loadTasks,
     clearAllTasks,
+    purgeTask,
     fetchFullTaskDetails,
   };
 }

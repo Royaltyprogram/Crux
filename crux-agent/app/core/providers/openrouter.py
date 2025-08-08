@@ -147,6 +147,8 @@ class OpenRouterProvider(BaseProvider):
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            # Hint providers to return aggregated JSON for non-streaming requests
+            "Accept": "application/json",
         }
         
         # Add optional headers for better rate limits and analytics
@@ -164,7 +166,7 @@ class OpenRouterProvider(BaseProvider):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         system_prompt: Optional[str] = None,
-        stream: bool = False, #not supported yet
+        stream: bool = False,
         truncation: Optional[str] = "auto",
         **kwargs: Any,
     ) -> str:
@@ -213,7 +215,74 @@ class OpenRouterProvider(BaseProvider):
         async def _make_request_and_parse():
             """Make API request and parse response. This will be retried on JSON errors."""
             logger.debug(f"Calling OpenRouter API with model={self.model}")
-            
+
+            # If streaming requested, use SSE stream and aggregate content incrementally
+            if payload.get("stream"):
+                await self._ensure_client()
+                content_parts: List[str] = []
+                reasoning_accum: List[str] = []
+                try:
+                    async with self._client.stream(
+                        "POST",
+                        self.BASE_URL,
+                        headers=self._get_headers(),
+                        json=payload,
+                    ) as stream_resp:
+                        ctype = stream_resp.headers.get("content-type", "")
+                        is_sse = "text/event-stream" in ctype or True  # Many providers use SSE for stream
+
+                        async for raw_line in stream_resp.aiter_lines():
+                            if not raw_line:
+                                continue
+                            line = raw_line.strip()
+                            # SSE comments start with ':' per spec
+                            if line.startswith(":"):
+                                continue
+                            if not line.lower().startswith("data:"):
+                                continue
+                            data_part = line[5:].strip()
+                            if data_part == "[DONE]":
+                                break
+                            try:
+                                evt = json.loads(data_part)
+                            except json.JSONDecodeError:
+                                # Some providers may chunk JSON across lines; skip partials
+                                continue
+                            # Standard OpenAI-style streaming schema
+                            choices = evt.get("choices") or []
+                            for ch in choices:
+                                delta = ch.get("delta") or {}
+                                piece = delta.get("content") or ""
+                                if not piece:
+                                    # Some providers send full message objects
+                                    msg = ch.get("message") or {}
+                                    piece = msg.get("content") or ""
+                                    rtxt = msg.get("reasoning") if isinstance(msg.get("reasoning"), str) else None
+                                    if rtxt:
+                                        reasoning_accum.append(rtxt)
+                                # Optional: non-standard fields
+                                rtxt2 = delta.get("reasoning") if isinstance(delta.get("reasoning"), str) else None
+                                if rtxt2:
+                                    reasoning_accum.append(rtxt2)
+                                if piece:
+                                    content_parts.append(piece)
+                                # Detect finish
+                                if ch.get("finish_reason"):
+                                    # let the loop drain remaining lines
+                                    pass
+                        # After stream ends, compute reasoning tokens
+                        if reasoning_accum:
+                            self.last_reasoning_summary = "\n".join(reasoning_accum)
+                            self.last_reasoning_tokens = max(1, len(self.last_reasoning_summary) // 4)
+                        else:
+                            # Approx using generated content
+                            generated = "".join(content_parts)
+                            self.last_reasoning_tokens = len(generated) // 4 if generated else 0
+                        return "".join(content_parts)
+                except Exception as e:
+                    logger.warning(f"Streaming parse failed, falling back to non-stream: {e}")
+                    # Fall through to non-stream request below
+
             response = await self._make_request(
                 "POST",
                 self.BASE_URL,
@@ -224,7 +293,46 @@ class OpenRouterProvider(BaseProvider):
             try:
                 data = response.json()
             except json.JSONDecodeError as e:
-                # Log the raw response content for debugging
+                # If server returned SSE but not in streaming mode, attempt to parse buffered SSE
+                ctype = response.headers.get("content-type", "")
+                raw_text = response.text or ""
+                if "text/event-stream" in ctype or raw_text.strip().startswith("data:"):
+                    content_parts: List[str] = []
+                    reasoning_accum: List[str] = []
+                    for raw_line in raw_text.splitlines():
+                        line = raw_line.strip()
+                        if not line or line.startswith(":"):
+                            continue
+                        if not line.lower().startswith("data:"):
+                            continue
+                        data_part = line[5:].strip()
+                        if data_part == "[DONE]":
+                            break
+                        try:
+                            evt = json.loads(data_part)
+                        except json.JSONDecodeError:
+                            continue
+                        choices = evt.get("choices") or []
+                        for ch in choices:
+                            delta = ch.get("delta") or {}
+                            piece = delta.get("content") or ""
+                            if not piece:
+                                msg = ch.get("message") or {}
+                                piece = msg.get("content") or ""
+                                rtxt = msg.get("reasoning") if isinstance(msg.get("reasoning"), str) else None
+                                if rtxt:
+                                    reasoning_accum.append(rtxt)
+                            rtxt2 = delta.get("reasoning") if isinstance(delta.get("reasoning"), str) else None
+                            if rtxt2:
+                                reasoning_accum.append(rtxt2)
+                            if piece:
+                                content_parts.append(piece)
+                    if content_parts:
+                        if reasoning_accum:
+                            self.last_reasoning_summary = "\n".join(reasoning_accum)
+                            self.last_reasoning_tokens = max(1, len(self.last_reasoning_summary) // 4)
+                        return "".join(content_parts)
+                # Log the raw response content for debugging, then re-raise
                 raw_content = response.text[:500] + "..." if len(response.text) > 500 else response.text
                 logger.warning(f"JSON parsing failed. Raw response preview: {raw_content}")
                 raise
@@ -238,14 +346,47 @@ class OpenRouterProvider(BaseProvider):
             self.last_reasoning_tokens = 0
             self.last_reasoning_summary = ""
             
-            # Check for reasoning content in the message
+            # Prefer explicit reasoning field in OpenRouter spec
             message = data["choices"][0]["message"]
-            if "reasoning_content" in message and message["reasoning_content"]:
-                reasoning_content = message["reasoning_content"]
-                self.last_reasoning_summary = reasoning_content
+            reasoning_text = message.get("reasoning")
+            if isinstance(reasoning_text, str) and reasoning_text.strip():
+                self.last_reasoning_summary = reasoning_text
                 # Estimate reasoning tokens (rough approximation: 1 token ≈ 4 characters)
-                self.last_reasoning_tokens = max(1, len(reasoning_content) // 4)
-                logger.debug(f"OpenRouter reasoning content found, estimated {self.last_reasoning_tokens} reasoning tokens")
+                self.last_reasoning_tokens = max(1, len(reasoning_text) // 4)
+                logger.debug(f"OpenRouter reasoning field found, estimated {self.last_reasoning_tokens} reasoning tokens")
+            else:
+                # Optional: Anthropic-style reasoning_details -> try to stringify
+                rd = message.get("reasoning_details")
+                extracted = ""
+                try:
+                    if isinstance(rd, dict):
+                        content_blocks = rd.get("content")
+                        if isinstance(content_blocks, list):
+                            parts = []
+                            for b in content_blocks:
+                                if isinstance(b, dict):
+                                    t = b.get("text") or b.get("content")
+                                    if isinstance(t, str):
+                                        parts.append(t)
+                            extracted = "\n".join([p.strip() for p in parts if p])
+                    elif isinstance(rd, str):
+                        extracted = rd
+                except Exception as e:
+                    logger.debug(f"Could not parse reasoning_details: {e}")
+                if extracted:
+                    self.last_reasoning_summary = extracted
+                    self.last_reasoning_tokens = max(1, len(extracted) // 4)
+                    logger.debug(f"Parsed reasoning_details, estimated {self.last_reasoning_tokens} reasoning tokens")
+                else:
+                    # Fallback: extract reasoning from <think>, <thinking>, or <reasoning> tags inside regular content
+                    import re
+                    tag_pattern = re.compile(r"<(?:think|thinking|reasoning)[^>]*>(.*?)</(?:think|thinking|reasoning)>", re.IGNORECASE | re.DOTALL)
+                    matches = tag_pattern.findall(content or "")
+                    if matches:
+                        extracted = "\n".join(m.strip() for m in matches)
+                        self.last_reasoning_summary = extracted
+                        self.last_reasoning_tokens = max(1, len(extracted) // 4)
+                        logger.debug(f"Extracted reasoning from tags, estimated {self.last_reasoning_tokens} reasoning tokens")
             
             # Check for reasoning tokens in usage metadata
             # If usage missing, fetch it via /generation/<id> endpoint (OpenRouter feature)
@@ -417,26 +558,20 @@ class OpenRouterProvider(BaseProvider):
         try:
             logger.debug(f"Attempting function calling with OpenRouter model={self.model}")
             
-            messages = []
-            
+            messages: List[Dict[str, Any]] = []
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
-            
             messages.append({"role": "user", "content": prompt})
             
-            # Prepare parameters with functions
-            payload = {
+            payload: Dict[str, Any] = {
                 "model": self.model,
                 "messages": messages,
                 "temperature": temperature,
                 "tools": [{"type": "function", "function": func} for func in functions],
                 "tool_choice": "auto",
             }
-            
             if max_tokens:
                 payload["max_tokens"] = max_tokens
-            
-            # Add any additional parameters
             payload.update(kwargs)
             
             try:
@@ -449,46 +584,107 @@ class OpenRouterProvider(BaseProvider):
                 
                 def parse_function_response(response):
                     data = response.json()
-                    
                     if "choices" not in data or not data["choices"]:
                         raise ProviderError("Invalid response format from OpenRouter")
-                    
-                    # Parse response and extract function calls
                     choice = data["choices"][0]
                     message = choice["message"]
                     
-                    # Create response object
+                    # Reasoning extraction
+                    self.last_reasoning_summary = ""
+                    self.last_reasoning_tokens = 0
+                    reasoning_text = message.get("reasoning")
+                    if isinstance(reasoning_text, str) and reasoning_text.strip():
+                        self.last_reasoning_summary = reasoning_text
+                        self.last_reasoning_tokens = max(1, len(reasoning_text) // 4)
+                    else:
+                        extracted = ""
+                        rd = message.get("reasoning_details")
+                        try:
+                            if isinstance(rd, dict):
+                                blocks = rd.get("content")
+                                if isinstance(blocks, list):
+                                    parts = []
+                                    for b in blocks:
+                                        if isinstance(b, dict):
+                                            t = b.get("text") or b.get("content")
+                                            if isinstance(t, str):
+                                                parts.append(t)
+                                    extracted = "\n".join(p.strip() for p in parts if p)
+                            elif isinstance(rd, str):
+                                extracted = rd
+                        except Exception:
+                            pass
+                        if not extracted:
+                            import re
+                            tag_pattern = re.compile(r"<(?:think|thinking|reasoning)[^>]*>(.*?)</(?:think|thinking|reasoning)>", re.IGNORECASE | re.DOTALL)
+                            matches = tag_pattern.findall(message.get("content", "") or "")
+                            if matches:
+                                extracted = "\n".join(m.strip() for m in matches)
+                        if extracted:
+                            self.last_reasoning_summary = extracted
+                            self.last_reasoning_tokens = max(1, len(extracted) // 4)
+                    
                     class FunctionResponse:
                         def __init__(self, content: str, function_calls: List[Any]):
                             self.content = content
                             self.function_calls = function_calls
                     
-                    function_calls = []
-                    if "tool_calls" in message and message["tool_calls"]:
+                    function_calls: List[Any] = []
+                    # OpenAI-style tool_calls
+                    if message.get("tool_calls"):
                         for tool_call in message["tool_calls"]:
-                            if tool_call["type"] == "function":
-                                # Use retry helper for parsing function arguments
-                                arguments = self._with_json_retry(
-                                    json.loads, tool_call["function"]["arguments"]
-                                )
+                            if tool_call.get("type") == "function" and tool_call.get("function"):
+                                fn = tool_call["function"]
+                                raw_args = fn.get("arguments", {})
+                                parsed_args: Dict[str, Any] = {}
+                                if isinstance(raw_args, str):
+                                    try:
+                                        parsed_args = self._with_json_retry(json.loads, raw_args)
+                                    except Exception:
+                                        parsed_args = {}
+                                elif isinstance(raw_args, dict):
+                                    parsed_args = raw_args
                                 function_calls.append(type('FunctionCall', (), {
-                                    'name': tool_call["function"]["name"],
-                                    'arguments': arguments
+                                    'name': fn.get("name", ""),
+                                    'arguments': parsed_args
                                 })())
+                    # Legacy function_call
+                    elif message.get("function_call"):
+                        fc = message["function_call"]
+                        raw_args = fc.get("arguments", {})
+                        parsed_args: Dict[str, Any] = {}
+                        if isinstance(raw_args, str):
+                            try:
+                                parsed_args = self._with_json_retry(json.loads, raw_args)
+                            except Exception:
+                                parsed_args = {}
+                        elif isinstance(raw_args, dict):
+                            parsed_args = raw_args
+                        function_calls.append(type('FunctionCall', (), {
+                            'name': fc.get("name", ""),
+                            'arguments': parsed_args
+                        })())
                     
                     content = message.get("content", "")
                     
-                    logger.debug(f"OpenRouter function calling completed, {len(function_calls)} function calls")
+                    # Usage reasoning tokens
+                    usage = data.get("usage", {}) if isinstance(data, dict) else {}
+                    rt = (
+                        usage.get("reasoning_tokens")
+                        or usage.get("reasoning_completion_tokens")
+                        or usage.get("cached_reasoning_tokens")
+                        or (usage.get("completion_tokens_details", {}) or {}).get("reasoning_tokens")
+                        or 0
+                    )
+                    if isinstance(rt, int) and rt > 0:
+                        self.last_reasoning_tokens = rt
                     
+                    logger.debug(f"OpenRouter function calling completed, {len(function_calls)} function calls")
                     return FunctionResponse(content, function_calls)
-
-                # Use the retry wrapper for JSON parsing  
-                return self._with_json_retry(parse_function_response, response)
                 
+                return self._with_json_retry(parse_function_response, response)
             except Exception as e:
                 logger.warning(f"Function calling failed, falling back to regular generation: {e}")
-                
-                # Fallback to regular generation
                 fallback_response = await self.complete(
                     prompt=prompt,
                     temperature=temperature,
@@ -496,15 +692,11 @@ class OpenRouterProvider(BaseProvider):
                     system_prompt=system_prompt,
                     **kwargs
                 )
-                
-                # Return as if it were a function response with no function calls
                 class FunctionResponse:
                     def __init__(self, content: str, function_calls: List[Any]):
                         self.content = content
                         self.function_calls = function_calls
-                
                 return FunctionResponse(fallback_response, [])
-                
         except Exception as e:
             logger.error(f"OpenRouter function calling error: {e}")
             raise ProviderError(f"OpenRouter function calling error: {str(e)}") from e
