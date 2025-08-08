@@ -138,6 +138,12 @@ Begin your analysis and make specialist consultations as needed.
                 self.last_reasoning_tokens = reasoning_tokens
             if hasattr(self.provider, 'last_reasoning_summary'):
                 reasoning_summary = getattr(self.provider, 'last_reasoning_summary', None)
+            # Surface reasoning tokens to progress stream as soon as we have them
+            if progress_callback and reasoning_tokens:
+                try:
+                    progress_callback(0.5, "Professor analysis: reasoning updated", reasoning_tokens)
+                except Exception:
+                    pass
             
             # Count tokens for initial analysis
             tokens_used = self.provider.count_tokens(initial_prompt)
@@ -148,11 +154,12 @@ Begin your analysis and make specialist consultations as needed.
             
             # Parse the response and handle function calls
             specialist_results = []
+            pending_specialist_calls: List[Dict[str, Any]] = []
             
             # Process structured function calls if any
             if hasattr(response, 'function_calls') and response.function_calls:
-                logger.info(f"Professor making {len(response.function_calls)} specialist consultations")
-                for i, func_call in enumerate(response.function_calls, 1):
+                logger.info(f"Professor identified {len(response.function_calls)} specialist consultation(s)")
+                for func_call in response.function_calls:
                     if func_call.name == "consult_graduate_specialist":
                         # Handle arguments - could be dict or string
                         arguments = func_call.arguments
@@ -163,15 +170,7 @@ Begin your analysis and make specialist consultations as needed.
                             except json.JSONDecodeError:
                                 logger.error(f"Failed to parse function arguments: {arguments}")
                                 continue
-                        
-                        logger.info(f"Specialist consultation {i}: {arguments.get('specialization', 'unknown')}")
-                        specialist_result = await self._execute_specialist_consultation(
-                            arguments,
-                            context.prompt,
-                            constraints,
-                            progress_callback
-                        )
-                        specialist_results.append(specialist_result)
+                        pending_specialist_calls.append(arguments)
             else:
                 # Fallback parsing of textual specialist calls when provider lacks structured tool support
                 # Handle both plain-string responses and wrapper objects with a .content field
@@ -187,14 +186,7 @@ Begin your analysis and make specialist consultations as needed.
                             json_part = match.group(1)
                             try:
                                 arguments = json.loads(json_part)
-                                logger.info(f"Specialist consultation (text-trigger): {arguments.get('expertise') or arguments.get('specialization', 'unknown')}")
-                                specialist_result = await self._execute_specialist_consultation(
-                                    arguments,
-                                    context.prompt,
-                                    constraints,
-                                    progress_callback,
-                                )
-                                specialist_results.append(specialist_result)
+                                pending_specialist_calls.append(arguments)
                             except json.JSONDecodeError:
                                 logger.error(f"Failed to parse specialist arguments: {json_part}")
                     # 2) Check for JSON array format containing tool entries
@@ -211,14 +203,7 @@ Begin your analysis and make specialist consultations as needed.
                                 for call in tool_calls:
                                     if isinstance(call, dict) and call.get('tool') == 'consult_graduate_specialist':
                                         arguments = call.get('parameters', {})
-                                        logger.info(f"Specialist consultation (json-array): {arguments.get('expertise') or arguments.get('specialization', 'unknown')}")
-                                        specialist_result = await self._execute_specialist_consultation(
-                                            arguments,
-                                            context.prompt,
-                                            constraints,
-                                            progress_callback,
-                                        )
-                                        specialist_results.append(specialist_result)
+                                        pending_specialist_calls.append(arguments)
                         except json.JSONDecodeError:
                             logger.error("Failed to parse JSON tool call array from model output")
                         # 3) If array parsing didn't succeed, try single-object JSON with tool field
@@ -231,16 +216,28 @@ Begin your analysis and make specialist consultations as needed.
                                     maybe_obj = json.loads(json_blob)
                                     if isinstance(maybe_obj, dict) and maybe_obj.get('tool') == 'consult_graduate_specialist':
                                         arguments = maybe_obj.get('parameters', {})
-                                        logger.info(f"Specialist consultation (json-object): {arguments.get('expertise') or arguments.get('specialization', 'unknown')}")
-                                        specialist_result = await self._execute_specialist_consultation(
-                                            arguments,
-                                            context.prompt,
-                                            constraints,
-                                            progress_callback,
-                                        )
-                                        specialist_results.append(specialist_result)
+                                        pending_specialist_calls.append(arguments)
                             except json.JSONDecodeError:
                                 logger.error("Failed to parse single JSON tool call object from model output")
+
+            # Execute pending specialist consultations with explicit progress updates
+            if pending_specialist_calls:
+                total = len(pending_specialist_calls)
+                logger.info(f"Professor making {total} specialist consultation(s)")
+                if progress_callback:
+                    phase_msg = f"Preparing {total} specialist consultation(s)"
+                    progress_callback(0.0, phase_msg)
+                for i, arguments in enumerate(pending_specialist_calls, 1):
+                    spec = arguments.get('expertise') or arguments.get('specialization', 'unknown')
+                    if progress_callback:
+                        progress_callback((i - 1) / max(1, total), f"Specialist {i}/{total} ({spec}): starting")
+                    specialist_result = await self._execute_specialist_consultation(
+                        arguments,
+                        context.prompt,
+                        constraints,
+                        progress_callback,
+                    )
+                    specialist_results.append(specialist_result)
             
             # Get the final synthesis
             if specialist_results:

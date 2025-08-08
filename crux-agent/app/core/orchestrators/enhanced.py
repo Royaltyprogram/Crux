@@ -132,7 +132,9 @@ class EnhancedRunner:
             if self._cancelled:
                 return
             iter_progress = (current_iter - 1) / max_iters if max_iters > 0 else 0
-            update_phase_progress(iter_progress, f"Professor analysis: {phase}")
+            # Stream latest known reasoning tokens (from last completed generation)
+            reasoning_tokens = getattr(self.professor, 'last_reasoning_tokens', 0)
+            update_phase_progress(iter_progress, f"Professor analysis: {phase}", reasoning_tokens)
         
         # Create Professor's Self-Evolve engine with progress callback
         professor_engine = SelfEvolve(

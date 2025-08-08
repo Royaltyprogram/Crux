@@ -147,6 +147,8 @@ class OpenRouterProvider(BaseProvider):
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
+            # Hint providers to return aggregated JSON for non-streaming requests
+            "Accept": "application/json",
         }
         
         # Add optional headers for better rate limits and analytics
@@ -164,7 +166,7 @@ class OpenRouterProvider(BaseProvider):
         temperature: float = 0.7,
         max_tokens: Optional[int] = None,
         system_prompt: Optional[str] = None,
-        stream: bool = False, #not supported yet
+        stream: bool = False,
         truncation: Optional[str] = "auto",
         **kwargs: Any,
     ) -> str:
@@ -213,7 +215,74 @@ class OpenRouterProvider(BaseProvider):
         async def _make_request_and_parse():
             """Make API request and parse response. This will be retried on JSON errors."""
             logger.debug(f"Calling OpenRouter API with model={self.model}")
-            
+
+            # If streaming requested, use SSE stream and aggregate content incrementally
+            if payload.get("stream"):
+                await self._ensure_client()
+                content_parts: List[str] = []
+                reasoning_accum: List[str] = []
+                try:
+                    async with self._client.stream(
+                        "POST",
+                        self.BASE_URL,
+                        headers=self._get_headers(),
+                        json=payload,
+                    ) as stream_resp:
+                        ctype = stream_resp.headers.get("content-type", "")
+                        is_sse = "text/event-stream" in ctype or True  # Many providers use SSE for stream
+
+                        async for raw_line in stream_resp.aiter_lines():
+                            if not raw_line:
+                                continue
+                            line = raw_line.strip()
+                            # SSE comments start with ':' per spec
+                            if line.startswith(":"):
+                                continue
+                            if not line.lower().startswith("data:"):
+                                continue
+                            data_part = line[5:].strip()
+                            if data_part == "[DONE]":
+                                break
+                            try:
+                                evt = json.loads(data_part)
+                            except json.JSONDecodeError:
+                                # Some providers may chunk JSON across lines; skip partials
+                                continue
+                            # Standard OpenAI-style streaming schema
+                            choices = evt.get("choices") or []
+                            for ch in choices:
+                                delta = ch.get("delta") or {}
+                                piece = delta.get("content") or ""
+                                if not piece:
+                                    # Some providers send full message objects
+                                    msg = ch.get("message") or {}
+                                    piece = msg.get("content") or ""
+                                    rtxt = msg.get("reasoning") if isinstance(msg.get("reasoning"), str) else None
+                                    if rtxt:
+                                        reasoning_accum.append(rtxt)
+                                # Optional: non-standard fields
+                                rtxt2 = delta.get("reasoning") if isinstance(delta.get("reasoning"), str) else None
+                                if rtxt2:
+                                    reasoning_accum.append(rtxt2)
+                                if piece:
+                                    content_parts.append(piece)
+                                # Detect finish
+                                if ch.get("finish_reason"):
+                                    # let the loop drain remaining lines
+                                    pass
+                        # After stream ends, compute reasoning tokens
+                        if reasoning_accum:
+                            self.last_reasoning_summary = "\n".join(reasoning_accum)
+                            self.last_reasoning_tokens = max(1, len(self.last_reasoning_summary) // 4)
+                        else:
+                            # Approx using generated content
+                            generated = "".join(content_parts)
+                            self.last_reasoning_tokens = len(generated) // 4 if generated else 0
+                        return "".join(content_parts)
+                except Exception as e:
+                    logger.warning(f"Streaming parse failed, falling back to non-stream: {e}")
+                    # Fall through to non-stream request below
+
             response = await self._make_request(
                 "POST",
                 self.BASE_URL,
@@ -224,7 +293,46 @@ class OpenRouterProvider(BaseProvider):
             try:
                 data = response.json()
             except json.JSONDecodeError as e:
-                # Log the raw response content for debugging
+                # If server returned SSE but not in streaming mode, attempt to parse buffered SSE
+                ctype = response.headers.get("content-type", "")
+                raw_text = response.text or ""
+                if "text/event-stream" in ctype or raw_text.strip().startswith("data:"):
+                    content_parts: List[str] = []
+                    reasoning_accum: List[str] = []
+                    for raw_line in raw_text.splitlines():
+                        line = raw_line.strip()
+                        if not line or line.startswith(":"):
+                            continue
+                        if not line.lower().startswith("data:"):
+                            continue
+                        data_part = line[5:].strip()
+                        if data_part == "[DONE]":
+                            break
+                        try:
+                            evt = json.loads(data_part)
+                        except json.JSONDecodeError:
+                            continue
+                        choices = evt.get("choices") or []
+                        for ch in choices:
+                            delta = ch.get("delta") or {}
+                            piece = delta.get("content") or ""
+                            if not piece:
+                                msg = ch.get("message") or {}
+                                piece = msg.get("content") or ""
+                                rtxt = msg.get("reasoning") if isinstance(msg.get("reasoning"), str) else None
+                                if rtxt:
+                                    reasoning_accum.append(rtxt)
+                            rtxt2 = delta.get("reasoning") if isinstance(delta.get("reasoning"), str) else None
+                            if rtxt2:
+                                reasoning_accum.append(rtxt2)
+                            if piece:
+                                content_parts.append(piece)
+                    if content_parts:
+                        if reasoning_accum:
+                            self.last_reasoning_summary = "\n".join(reasoning_accum)
+                            self.last_reasoning_tokens = max(1, len(self.last_reasoning_summary) // 4)
+                        return "".join(content_parts)
+                # Log the raw response content for debugging, then re-raise
                 raw_content = response.text[:500] + "..." if len(response.text) > 500 else response.text
                 logger.warning(f"JSON parsing failed. Raw response preview: {raw_content}")
                 raise
