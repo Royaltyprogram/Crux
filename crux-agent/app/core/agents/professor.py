@@ -174,11 +174,13 @@ Begin your analysis and make specialist consultations as needed.
                         specialist_results.append(specialist_result)
             else:
                 # Fallback parsing of textual specialist calls when provider lacks structured tool support
-                if isinstance(response, str):
+                # Handle both plain-string responses and wrapper objects with a .content field
+                text_response = response if isinstance(response, str) else getattr(response, 'content', '')
+                if isinstance(text_response, str) and text_response:
                     # 1) Check for legacy one-liner format: consult_graduate_specialist({...})
                     import re
                     pattern = r"consult_graduate_specialist\s*\((.*)\)"
-                    for line in response.splitlines():
+                    for line in text_response.splitlines():
                         line = line.strip()
                         match = re.search(pattern, line)
                         if match:
@@ -195,15 +197,17 @@ Begin your analysis and make specialist consultations as needed.
                                 specialist_results.append(specialist_result)
                             except json.JSONDecodeError:
                                 logger.error(f"Failed to parse specialist arguments: {json_part}")
-                    # 2) Check for new JSON array format containing tool entries
-                    if not specialist_results and '"tool"' in response and 'consult_graduate_specialist' in response:
+                    # 2) Check for JSON array format containing tool entries
+                    if not specialist_results and '"tool"' in text_response and 'consult_graduate_specialist' in text_response:
+                        parsed_array = False
                         try:
-                            # Attempt to locate the JSON array boundaries
-                            start = response.find('[')
-                            end = response.rfind(']') + 1
+                            # Attempt to locate the JSON array boundaries first
+                            start = text_response.find('[')
+                            end = text_response.rfind(']') + 1
                             if start != -1 and end > start:
-                                json_blob = response[start:end]
+                                json_blob = text_response[start:end]
                                 tool_calls = json.loads(json_blob)
+                                parsed_array = True
                                 for call in tool_calls:
                                     if isinstance(call, dict) and call.get('tool') == 'consult_graduate_specialist':
                                         arguments = call.get('parameters', {})
@@ -217,6 +221,26 @@ Begin your analysis and make specialist consultations as needed.
                                         specialist_results.append(specialist_result)
                         except json.JSONDecodeError:
                             logger.error("Failed to parse JSON tool call array from model output")
+                        # 3) If array parsing didn't succeed, try single-object JSON with tool field
+                        if not specialist_results and not parsed_array:
+                            try:
+                                start_obj = text_response.find('{')
+                                end_obj = text_response.rfind('}') + 1
+                                if start_obj != -1 and end_obj > start_obj:
+                                    json_blob = text_response[start_obj:end_obj]
+                                    maybe_obj = json.loads(json_blob)
+                                    if isinstance(maybe_obj, dict) and maybe_obj.get('tool') == 'consult_graduate_specialist':
+                                        arguments = maybe_obj.get('parameters', {})
+                                        logger.info(f"Specialist consultation (json-object): {arguments.get('expertise') or arguments.get('specialization', 'unknown')}")
+                                        specialist_result = await self._execute_specialist_consultation(
+                                            arguments,
+                                            context.prompt,
+                                            constraints,
+                                            progress_callback,
+                                        )
+                                        specialist_results.append(specialist_result)
+                            except json.JSONDecodeError:
+                                logger.error("Failed to parse single JSON tool call object from model output")
             
             # Get the final synthesis
             if specialist_results:
@@ -413,7 +437,7 @@ The professor has determined that this specific task requires your expertise in 
                 generator=specialist,
                 evaluator=specialist_evaluator,
                 refiner=specialist_refiner,
-                max_iters=settings.specialist_max_iters,  # Use configured specialist iterations
+                max_iters=getattr(self, 'specialist_max_iters', settings.specialist_max_iters),  # Honor runner override when provided
                 progress_callback=specialist_progress_callback if progress_callback else None,
             )
             

@@ -53,6 +53,12 @@ class EnhancedRunner:
         
         # Create Professor (always uses Quality-First approach)
         self.professor = ProfessorAgent(provider=provider)
+        # Propagate specialist iteration limit so Professor honors request overrides
+        try:
+            setattr(self.professor, 'specialist_max_iters', self.max_iters_per_specialist)
+        except Exception:
+            # Best-effort; fallback to Professor default if attribute cannot be set
+            pass
         
         # Create shared evaluator and refiner for specialists
         self.evaluator = EvaluatorAgent(provider=provider)
