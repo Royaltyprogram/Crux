@@ -2,6 +2,8 @@
 Professor agent for orchestrating specialists.
 """
 import json
+import ast
+import re
 from typing import Any, Dict, List, Optional, Callable
 
 from app.core.agents.base import AbstractAgent, AgentContext, AgentResult
@@ -10,6 +12,9 @@ from app.core.agents.prompts.professor_prompt import get_professor_quality_first
 from app.core.providers.base import BaseProvider
 from app.settings import settings
 from app.utils.logging import get_logger
+from app.core.providers.base import get_current_job_id
+import re
+import hashlib
 
 logger = get_logger(__name__)
 
@@ -81,6 +86,35 @@ class ProfessorAgent(AbstractAgent):
             }
         }
     
+    def _normalize_output(self, text: str) -> str:
+        """Normalize model output for readability.
+        - Convert CRLF to LF
+        - Collapse 3+ consecutive newlines to 2
+        - Trim leading/trailing whitespace
+        """
+        if not isinstance(text, str):
+            return text
+        try:
+            original = text
+            # Normalize line endings
+            s = original.replace('\r\n', '\n').replace('\r', '\n')
+            # Count collapsible runs before collapsing
+            runs_3plus = len(re.findall(r'\n{3,}', s))
+            # Collapse and trim
+            s = re.sub(r'\n{3,}', '\n\n', s)
+            s = s.strip()
+            # Log only when content changed
+            if s != original:
+                try:
+                    logger.debug(
+                        f"Professor normalization changed output: len {len(original)} -> {len(s)}; collapsed_runs(>=3): {runs_3plus}"
+                    )
+                except Exception:
+                    pass
+            return s
+        except Exception:
+            return text
+
     async def run(self, context: AgentContext) -> AgentResult:
         """
         Execute professor logic with function calling capabilities.
@@ -155,6 +189,11 @@ Begin your analysis and make specialist consultations as needed.
             # Parse the response and handle function calls
             specialist_results = []
             pending_specialist_calls: List[Dict[str, Any]] = []
+            def _compact(s: str, lim: int = 300) -> str:
+                try:
+                    return re.sub(r"\s+", " ", s).strip()[:lim]
+                except Exception:
+                    return str(s)[:lim]
             
             # Process structured function calls if any
             if hasattr(response, 'function_calls') and response.function_calls:
@@ -165,19 +204,121 @@ Begin your analysis and make specialist consultations as needed.
                         arguments = func_call.arguments
                         if isinstance(arguments, str):
                             try:
-                                import json
                                 arguments = json.loads(arguments)
                             except json.JSONDecodeError:
                                 logger.error(f"Failed to parse function arguments: {arguments}")
                                 continue
                         pending_specialist_calls.append(arguments)
+            # Some providers use `tool_calls` ala OpenAI; handle if present
+            elif hasattr(response, 'tool_calls') and response.tool_calls:
+                try:
+                    calls = response.tool_calls
+                    logger.info(f"Professor identified {len(calls)} tool_call(s) (OpenAI style)")
+                    for call in calls:
+                        # call may be dict-like or object with .function
+                        fn = None
+                        if isinstance(call, dict):
+                            fn = call.get('function') or call
+                        else:
+                            fn = getattr(call, 'function', None) or call
+                        if isinstance(fn, dict):
+                            name = fn.get('name') or fn.get('tool_name') or fn.get('tool') or fn.get('function') or fn.get('name')
+                            args = fn.get('arguments') or fn.get('parameters') or {}
+                        else:
+                            name = getattr(fn, 'name', None)
+                            args = getattr(fn, 'arguments', {})
+                        if name == 'consult_graduate_specialist':
+                            if isinstance(args, str):
+                                try:
+                                    args = json.loads(args)
+                                except json.JSONDecodeError:
+                                    # Relaxed fallback: attempt Python-literal style
+                                    try:
+                                        args = ast.literal_eval(args)
+                                    except Exception:
+                                        logger.error(f"Failed to parse function arguments: {args}")
+                                        continue
+                            logger.info(f"Professor detected specialist via tool_calls: { _compact(json.dumps(args) if isinstance(args, dict) else str(args)) }")
+                            pending_specialist_calls.append(args)
+                except Exception as e:
+                    logger.error(f"Error handling response.tool_calls: {e}")
             else:
                 # Fallback parsing of textual specialist calls when provider lacks structured tool support
                 # Handle both plain-string responses and wrapper objects with a .content field
                 text_response = response if isinstance(response, str) else getattr(response, 'content', '')
+                
+                def _normalize_specialist_args(raw: Dict[str, Any]) -> Dict[str, Any]:
+                    """Map various model-produced argument shapes into our required schema."""
+                    spec = (
+                        raw.get('specialization') or
+                        raw.get('expertise') or
+                        raw.get('domain') or
+                        'general'
+                    )
+                    task = (
+                        raw.get('specific_task') or
+                        raw.get('task') or
+                        raw.get('task_description') or
+                        raw.get('query') or
+                        (raw.get('subtasks', [{}])[0].get('description') if isinstance(raw.get('subtasks'), list) and raw.get('subtasks') else '') or
+                        ''
+                    )
+                    context_for_spec = (
+                        raw.get('context_for_specialist') or
+                        raw.get('query') or
+                        ''
+                    )
+                    constraints_for_spec = (
+                        raw.get('problem_constraints') or
+                        raw.get('verification_requirements') or
+                        ''
+                    )
+                    return {
+                        'specialization': spec,
+                        'specific_task': task,
+                        'context_for_specialist': context_for_spec,
+                        'problem_constraints': constraints_for_spec,
+                    }
+
+                def _parse_args_relaxed(s: str) -> Optional[Dict[str, Any]]:
+                    """Try to parse non-strict JSON or Python-like dicts; finally extract quoted key-values by regex."""
+                    if not isinstance(s, str):
+                        return s if isinstance(s, dict) else None
+                    # 1) strict JSON
+                    try:
+                        val = json.loads(s)
+                        return val if isinstance(val, dict) else None
+                    except Exception:
+                        pass
+                    # 2) Python literal
+                    try:
+                        val = ast.literal_eval(s)
+                        return val if isinstance(val, dict) else None
+                    except Exception:
+                        pass
+                    # 3) Quote bare keys heuristically then retry JSON
+                    try:
+                        tmp = re.sub(r'([\{,\s])([A-Za-z_][\w\-]*)\s*:', r'\1"\2":', s)
+                        val = json.loads(tmp)
+                        if isinstance(val, dict):
+                            return val
+                    except Exception:
+                        pass
+                    # 4) Extract quoted key-values (single or double quotes)
+                    keys = [
+                        'specialization','expertise','domain',
+                        'specific_task','task','task_description','query',
+                        'context_for_specialist','problem_constraints','verification_requirements'
+                    ]
+                    out: Dict[str, Any] = {}
+                    for k in keys:
+                        m = re.search(rf"{k}\\s*:\\s*([\"'])(.*?)\\1", s, re.IGNORECASE | re.DOTALL)
+                        if m:
+                            out[k] = m.group(2).strip()
+                    return out or None
+
                 if isinstance(text_response, str) and text_response:
                     # 1) Check for legacy one-liner format: consult_graduate_specialist({...})
-                    import re
                     pattern = r"consult_graduate_specialist\s*\((.*)\)"
                     for line in text_response.splitlines():
                         line = line.strip()
@@ -186,39 +327,218 @@ Begin your analysis and make specialist consultations as needed.
                             json_part = match.group(1)
                             try:
                                 arguments = json.loads(json_part)
-                                pending_specialist_calls.append(arguments)
+                                logger.info(f"Professor detected specialist via regex_call: { _compact(json_part) }")
+                                pending_specialist_calls.append(_normalize_specialist_args(arguments))
                             except json.JSONDecodeError:
-                                logger.error(f"Failed to parse specialist arguments: {json_part}")
-                    # 2) Check for JSON array format containing tool entries
-                    if not specialist_results and '"tool"' in text_response and 'consult_graduate_specialist' in text_response:
-                        parsed_array = False
+                                # Relaxed fallback: attempt Python-literal style
+                                try:
+                                    arguments = ast.literal_eval(json_part)
+                                    if isinstance(arguments, dict):
+                                        logger.info(f"Professor detected specialist via regex_call (relaxed JSON)")
+                                        pending_specialist_calls.append(_normalize_specialist_args(arguments))
+                                    else:
+                                        logger.error(f"Specialist arguments not a dict after relaxed parse: {type(arguments)}")
+                                except Exception:
+                                    logger.error(f"Failed to parse specialist arguments: {json_part}")
+                    # 1b) Multi-line function-call capture across text
+                    if not pending_specialist_calls:
+                        ml_matches = re.findall(r"consult_graduate_specialist\s*\(([\s\S]*?)\)", text_response, re.IGNORECASE)
+                        for json_part in ml_matches:
+                            parsed = _parse_args_relaxed(json_part)
+                            if isinstance(parsed, dict) and parsed:
+                                logger.info("Professor detected specialist via multiline_regex_call (relaxed)")
+                                pending_specialist_calls.append(_normalize_specialist_args(parsed))
+                    # 2) Check for JSON array format containing tool/function entries
+                    parsed_array = False
+                    try:
+                        start = text_response.find('[')
+                        end = text_response.rfind(']') + 1
+                        if start != -1 and end > start:
+                            json_blob = text_response[start:end]
+                            tool_calls = json.loads(json_blob)
+                            parsed_array = True
+                            for call in tool_calls:
+                                if not isinstance(call, dict):
+                                    continue
+                                name = (
+                                    call.get('tool') or
+                                    call.get('function') or
+                                    call.get('name') or
+                                    call.get('tool_name') or
+                                    (call.get('function') or {}).get('name')
+                                )
+                                if name == 'consult_graduate_specialist':
+                                    arguments = call.get('parameters', {}) or call.get('args', {}) or call.get('arguments') or (call.get('function') or {}).get('arguments')
+                                    logger.info(f"Professor detected specialist via json_array: { _compact(json.dumps(arguments) if isinstance(arguments, dict) else str(arguments)) }")
+                                    pending_specialist_calls.append(_normalize_specialist_args(arguments))
+                    except json.JSONDecodeError:
+                        logger.error("Failed to parse JSON tool/function call array from model output")
+                    # 3) Try single-object JSON with tool/function field or actions array
+                    if not pending_specialist_calls and not parsed_array:
                         try:
-                            # Attempt to locate the JSON array boundaries first
-                            start = text_response.find('[')
-                            end = text_response.rfind(']') + 1
-                            if start != -1 and end > start:
-                                json_blob = text_response[start:end]
-                                tool_calls = json.loads(json_blob)
-                                parsed_array = True
-                                for call in tool_calls:
-                                    if isinstance(call, dict) and call.get('tool') == 'consult_graduate_specialist':
-                                        arguments = call.get('parameters', {})
-                                        pending_specialist_calls.append(arguments)
+                            start_obj = text_response.find('{')
+                            end_obj = text_response.rfind('}') + 1
+                            if start_obj != -1 and end_obj > start_obj:
+                                json_blob = text_response[start_obj:end_obj]
+                                maybe_obj = json.loads(json_blob)
+                                if isinstance(maybe_obj, dict):
+                                    # Direct single-call object case
+                                    name = (
+                                        maybe_obj.get('tool') or
+                                        maybe_obj.get('function') or
+                                        maybe_obj.get('name') or
+                                        maybe_obj.get('tool_name') or
+                                        (maybe_obj.get('function') or {}).get('name')
+                                    )
+                                    if name == 'consult_graduate_specialist':
+                                        arguments = (
+                                            maybe_obj.get('parameters', {}) or
+                                            maybe_obj.get('args', {}) or
+                                            maybe_obj.get('arguments') or
+                                            (maybe_obj.get('function') or {}).get('arguments')
+                                        )
+                                        logger.info(f"Professor detected specialist via single_object: { _compact(json.dumps(arguments) if isinstance(arguments, dict) else str(arguments)) }")
+                                        pending_specialist_calls.append(_normalize_specialist_args(arguments))
+                                    # Nested consultations array case
+                                    consultations = maybe_obj.get('consultations') or maybe_obj.get('calls')
+                                    if isinstance(consultations, list):
+                                        for call in consultations:
+                                            if not isinstance(call, dict):
+                                                continue
+                                            cname = (
+                                                call.get('tool') or
+                                                call.get('function') or
+                                                call.get('name') or
+                                                call.get('tool_name') or
+                                                (call.get('function') or {}).get('name')
+                                            )
+                                            if cname == 'consult_graduate_specialist':
+                                                cargs = (
+                                                    call.get('parameters', {}) or
+                                                    call.get('args', {}) or
+                                                    call.get('arguments') or
+                                                    (call.get('function') or {}).get('arguments')
+                                                )
+                                                logger.info(f"Professor detected specialist via consultations_array: { _compact(json.dumps(cargs) if isinstance(cargs, dict) else str(cargs)) }")
+                                                pending_specialist_calls.append(_normalize_specialist_args(cargs))
                         except json.JSONDecodeError:
-                            logger.error("Failed to parse JSON tool call array from model output")
-                        # 3) If array parsing didn't succeed, try single-object JSON with tool field
-                        if not specialist_results and not parsed_array:
+                            logger.error("Failed to parse single JSON tool/function call object from model output")
+                    # 4) Scan fenced code blocks for JSON that may contain tool/function calls
+                    if not pending_specialist_calls:
+                        code_blocks = re.findall(r"```(?:json|javascript|js|python|py)?\n([\s\S]*?)```", text_response, re.IGNORECASE)
+                        for block in code_blocks:
+                            block_stripped = block.strip()
+                            if not block_stripped:
+                                continue
                             try:
-                                start_obj = text_response.find('{')
-                                end_obj = text_response.rfind('}') + 1
-                                if start_obj != -1 and end_obj > start_obj:
-                                    json_blob = text_response[start_obj:end_obj]
-                                    maybe_obj = json.loads(json_blob)
-                                    if isinstance(maybe_obj, dict) and maybe_obj.get('tool') == 'consult_graduate_specialist':
-                                        arguments = maybe_obj.get('parameters', {})
-                                        pending_specialist_calls.append(arguments)
+                                parsed = json.loads(block_stripped)
                             except json.JSONDecodeError:
-                                logger.error("Failed to parse single JSON tool call object from model output")
+                                # try relaxed Python-literal style blocks
+                                try:
+                                    parsed = ast.literal_eval(block_stripped)
+                                except Exception:
+                                    continue
+                            # Recursively extract calls from parsed content
+                            def _collect_calls_from_json(obj):
+                                if isinstance(obj, list):
+                                    for item in obj:
+                                        _collect_calls_from_json(item)
+                                elif isinstance(obj, dict):
+                                    # Check current dict for a function/tool signature
+                                    name = (
+                                        obj.get('tool') or obj.get('function') or obj.get('name') or obj.get('tool_name')
+                                    )
+                                    if not name and isinstance(obj.get('function'), dict):
+                                        name = obj['function'].get('name')
+                                    if name == 'consult_graduate_specialist':
+                                        args = (
+                                            obj.get('parameters') or obj.get('args') or obj.get('arguments') or
+                                            (obj.get('function') or {}).get('arguments')
+                                        )
+                                        if isinstance(args, str):
+                                            parsed_args = _parse_args_relaxed(args)
+                                            args = parsed_args if isinstance(parsed_args, dict) else None
+                                        if isinstance(args, dict):
+                                            logger.info(f"Professor detected specialist via code_block: { _compact(json.dumps(args)) }")
+                                            pending_specialist_calls.append(_normalize_specialist_args(args))
+                                    # Recurse into dict values (to reach nested arrays like 'consultations')
+                                    try:
+                                        for v in obj.values():
+                                            _collect_calls_from_json(v)
+                                    except Exception:
+                                        pass
+                            _collect_calls_from_json(parsed)
+
+                    # 4b) If 'consultations' array appears in plain text (not code-block), extract array region and parse
+                    if not pending_specialist_calls and isinstance(text_response, str) and 'consultations' in text_response:
+                        try:
+                            key_idx = text_response.find('consultations')
+                            bracket_start = text_response.find('[', key_idx)
+                            if bracket_start != -1:
+                                # naive bracket matching for the array
+                                depth = 0
+                                end_idx = None
+                                for j in range(bracket_start, len(text_response)):
+                                    ch = text_response[j]
+                                    if ch == '[':
+                                        depth += 1
+                                    elif ch == ']':
+                                        depth -= 1
+                                        if depth == 0:
+                                            end_idx = j + 1
+                                            break
+                                if end_idx:
+                                    array_blob = text_response[bracket_start:end_idx]
+                                    try:
+                                        calls = json.loads(array_blob)
+                                    except json.JSONDecodeError:
+                                        # try relaxed Python-literal style
+                                        calls = ast.literal_eval(array_blob)
+                                    if isinstance(calls, list):
+                                        for call in calls:
+                                            if not isinstance(call, dict):
+                                                continue
+                                            cname = (
+                                                call.get('tool') or call.get('function') or call.get('name') or call.get('tool_name') or
+                                                (call.get('function') or {}).get('name')
+                                            )
+                                            if cname == 'consult_graduate_specialist':
+                                                cargs = (
+                                                    call.get('parameters', {}) or call.get('args', {}) or call.get('arguments') or
+                                                    (call.get('function') or {}).get('arguments')
+                                                )
+                                                logger.info(f"Professor detected specialist via consultations_array_text: { _compact(json.dumps(cargs) if isinstance(cargs, dict) else str(cargs)) }")
+                                                pending_specialist_calls.append(_normalize_specialist_args(cargs))
+                        except Exception:
+                            logger.debug("Consultations array extraction failed in plain text path")
+
+                    # 5) Heuristic: if the keyword appears but we still have no calls, try to extract nearest JSON braces
+                    if not pending_specialist_calls and isinstance(text_response, str) and 'consult_graduate_specialist' in text_response:
+                        idx = text_response.find('consult_graduate_specialist')
+                        brace_start = text_response.find('{', idx)
+                        if brace_start != -1:
+                            # naive brace matching
+                            depth = 0
+                            end = None
+                            for j in range(brace_start, len(text_response)):
+                                ch = text_response[j]
+                                if ch == '{':
+                                    depth += 1
+                                elif ch == '}':
+                                    depth -= 1
+                                    if depth == 0:
+                                        end = j + 1
+                                        break
+                            if end:
+                                blob = text_response[brace_start:end]
+                                parsed_args = _parse_args_relaxed(blob)
+                                if isinstance(parsed_args, dict) and parsed_args:
+                                    logger.info(f"Professor detected specialist via heuristic_braces (relaxed)")
+                                    pending_specialist_calls.append(_normalize_specialist_args(parsed_args))
+                                else:
+                                    logger.info("Professor found 'consult_graduate_specialist' mention but could not parse arguments via heuristic")
+                    if not pending_specialist_calls and isinstance(text_response, str) and 'consult_graduate_specialist' in text_response:
+                        logger.info("Professor saw 'consult_graduate_specialist' mention but no parsable arguments were found")
 
             # Execute pending specialist consultations with explicit progress updates
             if pending_specialist_calls:
@@ -259,12 +579,23 @@ Begin your analysis and make specialist consultations as needed.
             
             logger.info(f"Professor completed analysis with {len(specialist_results)} specialist consultations, tokens: {tokens_used}")
             
-            # Build metadata with reasoning token information
+            # Aggregate context pressure flags from specialist results
+            context_summarized_any = any(
+                (r.get("metadata", {}) or {}).get("context_summarized", False) for r in specialist_results
+            ) if specialist_results else False
+            context_truncated_any = any(
+                (r.get("metadata", {}) or {}).get("context_truncated", False) for r in specialist_results
+            ) if specialist_results else False
+
+            # Build metadata with reasoning token information and flags
             metadata = {
                 "specialist_consultations": len(specialist_results),
                 "specialist_results": specialist_results,
                 "approach": "function_calling",
                 "function_calling_used": True,
+                # context flags propagated upward
+                "context_summarized": context_summarized_any,
+                "context_truncated": context_truncated_any,
             }
             
             # Add reasoning token metadata if available
@@ -328,11 +659,12 @@ Begin your analysis and make specialist consultations as needed.
                 # Provider lacks explicit function-calling support; fall back to a plain completion
                 # WITHOUT passing the functions payload because some providers (e.g. LMStudio) will
                 # reject unknown parameters.
-                logger.info("Provider doesn't have complete_with_functions; falling back to plain completion")
+                logger.info("Provider doesn't have complete_with_functions; falling back to plain completion (streaming)")
                 response = await self.provider.complete(
                     prompt=prompt,
                     system_prompt=self.system_prompt,
                     temperature=temperature if temperature is not None else self.temperature,
+                    stream=True,
                 )
                 return response
             else:
@@ -430,12 +762,29 @@ The professor has determined that this specific task requires your expertise in 
             
             # Create Self-Evolve engine for specialist
             from app.settings import settings
+            # Build a stable specialist-specific job_id derived from the parent job and task
+            _parent_job_id = None
+            try:
+                _parent_job_id = get_current_job_id()
+            except Exception:
+                _parent_job_id = None
+            # Derive deterministic child job_id to avoid lock contention with professor
+            _specialist_job_id = None
+            if _parent_job_id:
+                try:
+                    _slug = re.sub(r"[^a-z0-9_]+", "", specialization.lower().replace(" ", "_"))
+                    _task_hash = hashlib.sha1((specific_task or "").encode("utf-8")).hexdigest()[:8]
+                    _specialist_job_id = f"{_parent_job_id}:spec:{_slug}:{_task_hash}"
+                except Exception:
+                    _specialist_job_id = f"{_parent_job_id}:spec"
+
             specialist_engine = SelfEvolve(
                 generator=specialist,
                 evaluator=specialist_evaluator,
                 refiner=specialist_refiner,
                 max_iters=getattr(self, 'specialist_max_iters', settings.specialist_max_iters),  # Honor runner override when provided
                 progress_callback=specialist_progress_callback if progress_callback else None,
+                job_id=_specialist_job_id,
             )
             
             # Create enhanced problem with comprehensive context (self-evolve pattern)
@@ -472,6 +821,8 @@ I am counting on your specialized skills to handle this with the precision and d
                     "original_problem": original_problem,
                     "from_professor": True,
                     "enhanced_context_used": True,
+                    # Ensure job_id propagates for provider generation locking
+                    "job_id": _specialist_job_id,
                 }
             )
             
@@ -566,50 +917,57 @@ I am counting on your specialized skills to handle this with the precision and d
             if answer_match:
                 final_answer_value = answer_match.group(1).strip()
 
-            # Create result with enhanced metadata (exactly like self-evolve pattern)
+            # Create result with enhanced metadata (self-evolve aligned)
             result = {
                 "specialization": specialization,
                 "task": specific_task,
                 "context": context_for_specialist,
                 "constraints": problem_constraints,
                 "output": specialist_solution.output,
-                "final_answer": final_answer,  # Complete final answer
-                "final_answer_value": final_answer_value,  # Extracted answer value
-                "final_evaluation": final_evaluation,  # Complete evaluation from verifier
-                "total_iterations": total_iterations,  # Number of iterations
-                "formatted_result": formatted_result,  # For continuation prompts
-                "professor_reasoning_context": professor_reasoning_context,  # Enhanced context preservation
-                "reasoning_section": reasoning_section,  # Complete reasoning process from ALL iterations
-                "session_details": {  # Complete session details like self-evolve
+                "final_answer": final_answer,
+                "final_answer_value": final_answer_value,
+                "final_evaluation": final_evaluation,
+                "total_iterations": total_iterations,
+                "formatted_result": formatted_result,
+                "professor_reasoning_context": professor_reasoning_context,
+                "reasoning_section": reasoning_section,
+                "session_details": {
                     "iterations": [
                         {
                             "iteration": i + 1,
                             "reasoning_summary": iter_data.get("metadata", {}).get("generator", {}).get("reasoning_summary", ""),
                             "evaluator_reasoning_summary": iter_data.get("metadata", {}).get("evaluator", {}).get("reasoning_summary", ""),
                             "refiner_reasoning_summary": iter_data.get("metadata", {}).get("refiner", {}).get("reasoning_summary", ""),
-                            # Include full answer only for final iteration, preview for others
+                            "reasoning_tokens": (
+                                (iter_data.get("metadata", {}).get("generator", {}).get("reasoning_tokens", 0) or 0)
+                                + (iter_data.get("metadata", {}).get("evaluator", {}).get("reasoning_tokens", 0) or 0)
+                                + (iter_data.get("metadata", {}).get("refiner", {}).get("reasoning_tokens", 0) or 0)
+                            ),
                             "answer": iter_data.get("output", "") if (i + 1) == len(specialist_solution.evolution_history) else (iter_data.get("output", "")[:100] + "..." if iter_data.get("output", "") else ""),
                             "evaluation_feedback": iter_data.get("feedback", ""),
-                            "timestamp": iter_data.get("timestamp", "")
+                            "timestamp": iter_data.get("timestamp", ""),
                         }
                         for i, iter_data in enumerate(specialist_solution.evolution_history)
-                    ]
+                    ] if specialist_solution.evolution_history else []
                 },
                 "metadata": {
                     "iterations": specialist_solution.iterations,
                     "converged": specialist_solution.metadata.get('converged', False),
                     "total_tokens": specialist_solution.total_tokens,
                     "stop_reason": specialist_solution.metadata.get('stop_reason', 'unknown'),
-                    "enhanced_context_used": True,  # Flag for enhanced context usage
+                    "enhanced_context_used": True,
                     "evolution_history_available": bool(specialist_solution.evolution_history),
-                    "complete_reasoning_provided": bool(reasoning_section),  # Flag for complete reasoning
-                }
+                    "complete_reasoning_provided": bool(reasoning_section),
+                    # Context pressure flags propagated from Self-Evolve
+                    "context_summarized": specialist_solution.metadata.get('context_summarized', False),
+                    "context_truncated": specialist_solution.metadata.get('context_truncated', False),
+                },
             }
-            
-            # Save consultation history for conversation continuity (like self-evolve)
+
+            # Save consultation history for conversation continuity
             self.consultation_history.append(result)
             logger.info(f"Consultation result saved to history. Total consultations: {len(self.consultation_history)}")
-            
+
             return result
             
         except Exception as e:
@@ -674,15 +1032,14 @@ Provide your final synthesis:
                 prompt=synthesis_prompt,
                 temperature=0.5,  # Moderate temperature for synthesis
             )
-            
+
             # Extract reasoning tokens from synthesis if available
             if hasattr(self.provider, 'last_reasoning_tokens'):
                 synthesis_reasoning_tokens = getattr(self.provider, 'last_reasoning_tokens', 0)
                 if synthesis_reasoning_tokens > 0:
                     self.last_reasoning_tokens += synthesis_reasoning_tokens
-            
-            return synthesis
-            
+
+            return self._normalize_output(synthesis)
         except Exception as e:
             logger.error(f"Synthesis failed: {e}")
             # Fallback: concatenate results using formatted_result if available
@@ -692,8 +1049,9 @@ Provide your final synthesis:
                     combined_parts.append(r['formatted_result'])
                 else:
                     combined_parts.append(f"{r.get('specialization', 'Specialist')}: {r.get('output', '')}")
-            
-            return f"Combined specialist results:\n\n" + "\n\n".join(combined_parts)
+
+            _out = "Combined specialist results:\n\n" + "\n\n".join(combined_parts)
+            return self._normalize_output(_out)
 
     async def synthesize(
         self,
@@ -703,17 +1061,9 @@ Provide your final synthesis:
     ) -> AgentResult:
         """
         Synthesize specialist results into final answer.
-        
-        Args:
-            original_problem: The original problem
-            specialist_results: Results from specialists
-            synthesis_plan: Plan for synthesis
-            
-        Returns:
-            Synthesized result
         """
         logger.info(f"Professor synthesizing {len(specialist_results)} specialist results")
-        
+
         # Build synthesis prompt
         synthesis_prompt = f"""
 Original Problem: {original_problem}
@@ -722,7 +1072,7 @@ Synthesis Plan: {synthesis_plan or "Combine all specialist insights into a compr
 
 Specialist Results:
 """
-        
+
         for i, result in enumerate(specialist_results, 1):
             # Use formatted_result if available, otherwise fall back to simple output
             if 'formatted_result' in result:
@@ -731,7 +1081,7 @@ Specialist Results:
                 synthesis_prompt += f"\n\n--- Specialist {i} ({result.get('domain', 'Unknown')}) ---\n"
                 synthesis_prompt += f"Task: {result.get('task', 'N/A')}\n"
                 synthesis_prompt += f"Result: {result.get('output', 'No output')}\n"
-        
+
         synthesis_prompt += """
 
 Please synthesize these specialist results into a comprehensive solution that:
@@ -740,14 +1090,14 @@ Please synthesize these specialist results into a comprehensive solution that:
 3. Presents a clear, coherent answer
 4. Highlights key findings and recommendations
 """
-        
+
         try:
             # Generate synthesis
             synthesis = await self._generate(
                 prompt=synthesis_prompt,
                 temperature=0.5,  # Moderate temperature for synthesis
             )
-            
+
             # Extract reasoning tokens if available
             reasoning_tokens = 0
             reasoning_summary = None
@@ -756,28 +1106,26 @@ Please synthesize these specialist results into a comprehensive solution that:
                 self.last_reasoning_tokens = reasoning_tokens
             if hasattr(self.provider, 'last_reasoning_summary'):
                 reasoning_summary = getattr(self.provider, 'last_reasoning_summary', None)
-            
-            # Count tokens for synthesis
-            tokens_used = self.provider.count_tokens(synthesis_prompt + synthesis)
-            
+
+            # Normalize and count tokens
+            normalized = self._normalize_output(synthesis)
+            tokens_used = self.provider.count_tokens(synthesis_prompt) + self.provider.count_tokens(normalized)
+
             # Build metadata with reasoning token information
             metadata = {
                 "specialist_count": len(specialist_results),
                 "synthesis_plan": synthesis_plan,
             }
-            
-            # Add reasoning token metadata if available
             if reasoning_tokens > 0:
                 metadata["reasoning_tokens"] = reasoning_tokens
             if reasoning_summary:
                 metadata["reasoning_summary"] = reasoning_summary
-            
+
             return AgentResult(
-                output=synthesis,
+                output=normalized,
                 metadata=metadata,
                 tokens_used=tokens_used,
             )
-            
         except Exception as e:
             logger.error(f"Professor synthesis failed: {e}")
             # Fallback: concatenate results using formatted_result if available
@@ -787,28 +1135,17 @@ Please synthesize these specialist results into a comprehensive solution that:
                     combined_parts.append(r['formatted_result'])
                 else:
                     combined_parts.append(f"{r.get('domain', 'Specialist')}: {r.get('output', '')}")
-            
-            fallback_output = f"Combined specialist results:\n\n" + "\n\n".join(combined_parts)
-            
+
+            fallback_output = "Combined specialist results:\n\n" + "\n\n".join(combined_parts)
+            normalized_fb = self._normalize_output(fallback_output)
             return AgentResult(
-                output=fallback_output,
+                output=normalized_fb,
                 metadata={"error": str(e), "fallback": True},
-                tokens_used=self.provider.count_tokens(fallback_output),
+                tokens_used=self.provider.count_tokens(normalized_fb),
             )
 
     async def continue_conversation(self, follow_up: str, **kwargs) -> AgentResult:
-        """Continue an existing conversation using provider's capabilities.
-        
-        Leverages the provider's built-in conversation continuation functionality
-        which handles Response API continuation for o-series models automatically.
-        
-        Args:
-            follow_up: Follow-up prompt/question
-            **kwargs: Additional arguments
-            
-        Returns:
-            AgentResult with continued conversation
-        """
+        """Continue an existing conversation using provider's capabilities."""
         # Check if provider supports conversation continuation
         if not hasattr(self.provider, 'continue_conversation'):
             logger.warning("Provider doesn't support conversation continuation, falling back to new conversation")
@@ -816,7 +1153,7 @@ Please synthesize these specialist results into a comprehensive solution that:
             return await self.run(AgentContext(prompt=follow_up, additional_context=kwargs))
 
         logger.info("Continuing conversation using provider's continuation capability")
-        
+
         # Create follow-up prompt that mentions specialist tools
         follow_up_prompt = f"""
 {follow_up}
@@ -824,14 +1161,14 @@ Please synthesize these specialist results into a comprehensive solution that:
 You are continuing the previous conversation. You still have access to all specialist consultation tools if needed.
 Use your previous analysis and specialist consultations to provide a comprehensive follow-up response.
 """
-        
+
         try:
             # Use provider's conversation continuation
             response = await self.provider.continue_conversation(
                 follow_up=follow_up_prompt,
                 temperature=self.temperature,
             )
-            
+
             # Extract reasoning tokens if available
             reasoning_tokens = 0
             reasoning_summary = None
@@ -840,40 +1177,32 @@ Use your previous analysis and specialist consultations to provide a comprehensi
                 self.last_reasoning_tokens = reasoning_tokens
             if hasattr(self.provider, 'last_reasoning_summary'):
                 reasoning_summary = getattr(self.provider, 'last_reasoning_summary', None)
-            
-            # Count tokens for follow-up
-            tokens_used = self.provider.count_tokens(follow_up_prompt)
-            if isinstance(response, str):
-                tokens_used += self.provider.count_tokens(response)
-            elif hasattr(response, 'content'):
-                tokens_used += self.provider.count_tokens(response.content)
-            
-            # Extract content from response
+
+            # Extract content and normalize
             content = response if isinstance(response, str) else (
                 response.content if hasattr(response, 'content') else str(response)
             )
-            
+            content = self._normalize_output(content)
+            tokens_used = self.provider.count_tokens(follow_up_prompt) + self.provider.count_tokens(content)
+
             logger.info(f"Conversation continuation completed, tokens: {tokens_used}")
-            
+
             # Build metadata with reasoning token information
             metadata = {
                 "conversation_continued": True,
                 "provider_continuation": True,
                 "approach": "provider_continuation",
             }
-            
-            # Add reasoning token metadata if available
             if reasoning_tokens > 0:
                 metadata["reasoning_tokens"] = reasoning_tokens
             if reasoning_summary:
                 metadata["reasoning_summary"] = reasoning_summary
-            
+
             return AgentResult(
                 output=content,
                 metadata=metadata,
                 tokens_used=tokens_used,
             )
-            
         except Exception as e:
             logger.error(f"Provider conversation continuation failed: {e}")
             # Fallback to new conversation

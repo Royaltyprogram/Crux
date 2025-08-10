@@ -50,6 +50,13 @@ class IterationSession:
     final_answer: str
     iterations: List[IterationResult]
     total_iterations: int
+    # Context management summary
+    context_summarized: bool = False
+    context_truncated: bool = False
+    # Useful context settings
+    max_context_tokens: Optional[int] = None
+    response_reserve: Optional[int] = None
+    summarization_threshold: Optional[float] = None
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -57,6 +64,13 @@ class IterationSession:
             "final_answer": self.final_answer,
             "total_iterations": self.total_iterations,
             "iterations": [it.to_dict() for it in self.iterations]
+            ,
+            # Surface context management flags and settings for UI/backends
+            "context_summarized": self.context_summarized,
+            "context_truncated": self.context_truncated,
+            "max_context_tokens": self.max_context_tokens,
+            "response_reserve": self.response_reserve,
+            "summarization_threshold": self.summarization_threshold,
         }
 
 
@@ -108,6 +122,10 @@ class IterationManager:
         
         self.logger.info(f"Context management initialized for {current_provider}: {self.max_context_tokens:,} tokens")
         self.logger.info(f"Response reserve: {self.response_reserve:,} tokens, Summarization threshold: {self.summarization_threshold*100:.0f}%")
+        
+        # Track whether summarization/truncation occurred during this session
+        self._context_summarized_occurred = False
+        self._context_truncated_occurred = False
         
         
         # Initialize prompt refiner
@@ -279,7 +297,12 @@ class IterationManager:
             original_question=original_question,
             final_answer=final_answer,
             iterations=iterations,
-            total_iterations=len(iterations)
+            total_iterations=len(iterations),
+            context_summarized=self._context_summarized_occurred,
+            context_truncated=self._context_truncated_occurred,
+            max_context_tokens=self.max_context_tokens,
+            response_reserve=self.response_reserve,
+            summarization_threshold=self.summarization_threshold,
         )
         
         self.logger.info(
@@ -394,13 +417,15 @@ class IterationManager:
         
         # If it's moderately over the limit, try LLM summarization
         if reasoning_tokens <= available_tokens * 2:  # Within 2x limit
-            target_tokens = int(available_tokens * 0.9)  # Target 90% of available
+            target_tokens = int(available_tokens * 0.4)  # Target 40% of available
             summarized = self._summarize_reasoning_with_llm(reasoning, target_tokens)
             
             if summarized and self._count_tokens(summarized) <= available_tokens:
                 self.logger.info(
                     f"LLM summarization: {reasoning_tokens} -> {self._count_tokens(summarized)} tokens"
                 )
+                # Mark that summarization occurred
+                self._context_summarized_occurred = True
                 return "\n\n---PREVIOUS REASONING CONTEXT (SUMMARIZED)---\n" + summarized
         
         # Fallback to truncation if summarization fails or reasoning is too large
@@ -408,6 +433,8 @@ class IterationManager:
         truncated = self._truncate_reasoning(reasoning, available_tokens)
         final_tokens = self._count_tokens(truncated)
         self.logger.info(f"Truncation applied: {reasoning_tokens} -> {final_tokens} tokens")
+        # Mark that truncation occurred
+        self._context_truncated_occurred = True
         return "\n\n---PREVIOUS REASONING CONTEXT (TRUNCATED)---\n" + truncated
     
     def _handle_multiple_reasoning(self, accumulated_reasoning: List[str], available_tokens: int) -> str:
@@ -447,11 +474,15 @@ class IterationManager:
             self.logger.info(
                 f"LLM summarized older reasoning: {older_tokens} -> {self._count_tokens(summarized_older)} tokens"
             )
+            # Mark that summarization occurred
+            self._context_summarized_occurred = True
             context_parts = [summarized_older, most_recent]
             return "\n\n---PREVIOUS REASONING CONTEXT (OLDER SUMMARIZED)---\n" + "\n\n".join(context_parts)
         
         # Summarization failed - use rolling window fallback
         self.logger.warning("LLM summarization failed, using rolling window fallback")
+        # Mark that effective truncation occurred (dropping older context)
+        self._context_truncated_occurred = True
         return "\n\n---PREVIOUS REASONING CONTEXT (RECENT ONLY)---\n" + most_recent
     
     def _summarize_reasoning_with_llm(self, reasoning_text: str, target_tokens: int) -> Optional[str]:

@@ -137,8 +137,15 @@ class EvaluatorAgent(AbstractAgent):
         )
         
         try:
-            # Log the raw evaluation prompt for debugging
-            logger.info(f"Raw evaluation_prompt: {evaluation_prompt}")
+            # Log the evaluation prompt compacted (collapse whitespace) at INFO for readability
+            compact_prompt = re.sub(r"\s+", " ", evaluation_prompt).strip()
+            compact_prompt_preview = (compact_prompt[:2000] + "...") if len(compact_prompt) > 2000 else compact_prompt
+            logger.info(
+                f"Evaluation prompt (orig_len={len(evaluation_prompt)}, compact_len={len(compact_prompt)}): {compact_prompt_preview}"
+            )
+            # Also keep a truncated raw at DEBUG if needed
+            raw_prompt_preview = (evaluation_prompt[:2000] + "...") if len(evaluation_prompt) > 2000 else evaluation_prompt
+            logger.debug(f"Evaluation prompt RAW (len={len(evaluation_prompt)}): {raw_prompt_preview}")
             
             # Generate evaluation allowing code execution via function-calling API
             evaluation_result = await self._generate_with_functions(
@@ -148,8 +155,15 @@ class EvaluatorAgent(AbstractAgent):
             )
             evaluation = evaluation_result.strip() if isinstance(evaluation_result, str) else str(evaluation_result).strip()
             
-            # Log the raw model reply for debugging
-            logger.info(f"Raw model reply: {evaluation}")
+            # Log the model reply compacted at INFO
+            compact_reply = re.sub(r"\s+", " ", evaluation).strip()
+            compact_reply_preview = (compact_reply[:2000] + "...") if len(compact_reply) > 2000 else compact_reply
+            logger.info(
+                f"Model reply (orig_len={len(evaluation)}, compact_len={len(compact_reply)}): {compact_reply_preview}"
+            )
+            # Also keep a truncated raw at DEBUG
+            raw_reply_preview = (evaluation[:2000] + "...") if len(evaluation) > 2000 else evaluation
+            logger.debug(f"Model reply RAW (len={len(evaluation)}): {raw_reply_preview}")
 
             # Prevent invalid empty evaluations from wrongly triggering stoppage
             if not evaluation or evaluation == "Cannot evaluate: no answer provided":
