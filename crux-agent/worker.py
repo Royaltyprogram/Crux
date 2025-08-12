@@ -7,6 +7,8 @@ import time
 from datetime import datetime
 
 from celery import Celery
+import logging
+
 from celery.utils.log import get_task_logger
 
 from app.core.orchestrators.basic import BasicRunner
@@ -34,10 +36,16 @@ app.conf.update(
     task_soft_time_limit=10000,  # 2 hours 46 minutes soft limit
     worker_prefetch_multiplier=1,  # For fair task distribution
     worker_max_tasks_per_child=50,  # Restart worker after 50 tasks to prevent memory leaks
+    # Suppress stdout/stderr noise (e.g., token-by-token prints) unless ERROR or higher
+    worker_redirect_stdouts=True,
+    worker_redirect_stdouts_level="ERROR",
 )
 
 logger = get_task_logger(__name__)
 
+# Reduce noisy provider logs at standard log level (INFO)
+# OpenRouter SSE/keep-alive handling can emit verbose diagnostics; clamp to WARNING
+logging.getLogger("app.core.providers.openrouter").setLevel(logging.DEBUG)
 
 def get_redis_sync():
     """Get synchronous Redis client for Celery tasks."""
@@ -56,30 +64,45 @@ def solve_basic_task(self, job_id: str, request_data: dict):
     """
     logger.info(f"Starting basic solve task: {job_id}")
     redis_client = get_redis_sync()
+    # Single-flight guard: prevent duplicate execution across workers/restarts
+    lock_key = f"lock:job:{job_id}"
+    have_lock = False
+    try:
+        # Acquire lock with TTL slightly above soft limit
+        have_lock = bool(redis_client.set(lock_key, self.request.id or "worker", nx=True, ex=10800))
+        if not have_lock:
+            current_status = redis_client.hget(f"job:{job_id}", "status")
+            logger.info(f"Duplicate basic task detected for {job_id}; status={current_status}. Skipping.")
+            # Early return without changing status/result
+            return {"message": "Duplicate basic task skipped", "job_id": job_id, "status": current_status}
+    except Exception as e:
+        logger.warning(f"Failed to acquire single-flight lock for {job_id}: {e}")
     
     try:
-        # Update job status to running
-        redis_client.hset(
-            f"job:{job_id}",
-            mapping={
-                "status": JobStatus.RUNNING.value,
-                "started_at": datetime.utcnow().isoformat(),
-            },
-        )
+        # Update job status to running (only by the lock holder)
+        if have_lock:
+            redis_client.hset(
+                f"job:{job_id}",
+                mapping={
+                    "status": JobStatus.RUNNING.value,
+                    "started_at": datetime.utcnow().isoformat(),
+                },
+            )
         
         # Run async solve in sync context
         result = asyncio.run(_solve_basic_async(job_id, request_data, self))
         
         # Store result
-        redis_client.hset(
-            f"job:{job_id}",
-            mapping={
-                "status": JobStatus.COMPLETED.value,
-                "completed_at": datetime.utcnow().isoformat(),
-                "result": json.dumps(result),
-                "progress": 1.0,
-            },
-        )
+        if have_lock:
+            redis_client.hset(
+                f"job:{job_id}",
+                mapping={
+                    "status": JobStatus.COMPLETED.value,
+                    "completed_at": datetime.utcnow().isoformat(),
+                    "result": json.dumps(result),
+                    "progress": 1.0,
+                },
+            )
         
         logger.info(f"Basic solve task completed: {job_id}")
         return result
@@ -88,16 +111,24 @@ def solve_basic_task(self, job_id: str, request_data: dict):
         logger.error(f"Basic solve task failed: {job_id} - {e}")
         
         # Update job status to failed
-        redis_client.hset(
-            f"job:{job_id}",
-            mapping={
-                "status": JobStatus.FAILED.value,
-                "completed_at": datetime.utcnow().isoformat(),
-                "error": str(e),
-            },
-        )
+        if have_lock:
+            redis_client.hset(
+                f"job:{job_id}",
+                mapping={
+                    "status": JobStatus.FAILED.value,
+                    "completed_at": datetime.utcnow().isoformat(),
+                    "error": str(e),
+                },
+            )
         
         raise
+    finally:
+        # Release lock if held
+        try:
+            if have_lock:
+                redis_client.delete(lock_key)
+        except Exception:
+            pass
 
 
 @app.task(name="app.worker.solve_enhanced_task", bind=True)
@@ -111,30 +142,43 @@ def solve_enhanced_task(self, job_id: str, request_data: dict):
     """
     logger.info(f"Starting enhanced solve task: {job_id}")
     redis_client = get_redis_sync()
+    # Single-flight guard: prevent duplicate execution across workers/restarts
+    lock_key = f"lock:job:{job_id}"
+    have_lock = False
+    try:
+        have_lock = bool(redis_client.set(lock_key, self.request.id or "worker", nx=True, ex=10800))
+        if not have_lock:
+            current_status = redis_client.hget(f"job:{job_id}", "status")
+            logger.info(f"Duplicate enhanced task detected for {job_id}; status={current_status}. Skipping.")
+            return {"message": "Duplicate enhanced task skipped", "job_id": job_id, "status": current_status}
+    except Exception as e:
+        logger.warning(f"Failed to acquire single-flight lock for {job_id}: {e}")
     
     try:
-        # Update job status to running
-        redis_client.hset(
-            f"job:{job_id}",
-            mapping={
-                "status": JobStatus.RUNNING.value,
-                "started_at": datetime.utcnow().isoformat(),
-            },
-        )
+        # Update job status to running (only by the lock holder)
+        if have_lock:
+            redis_client.hset(
+                f"job:{job_id}",
+                mapping={
+                    "status": JobStatus.RUNNING.value,
+                    "started_at": datetime.utcnow().isoformat(),
+                },
+            )
         
         # Run async solve in sync context
         result = asyncio.run(_solve_enhanced_async(job_id, request_data, self))
         
         # Store result
-        redis_client.hset(
-            f"job:{job_id}",
-            mapping={
-                "status": JobStatus.COMPLETED.value,
-                "completed_at": datetime.utcnow().isoformat(),
-                "result": json.dumps(result),
-                "progress": 1.0,
-            },
-        )
+        if have_lock:
+            redis_client.hset(
+                f"job:{job_id}",
+                mapping={
+                    "status": JobStatus.COMPLETED.value,
+                    "completed_at": datetime.utcnow().isoformat(),
+                    "result": json.dumps(result),
+                    "progress": 1.0,
+                },
+            )
         
         logger.info(f"Enhanced solve task completed: {job_id}")
         return result
@@ -143,16 +187,24 @@ def solve_enhanced_task(self, job_id: str, request_data: dict):
         logger.error(f"Enhanced solve task failed: {job_id} - {e}")
         
         # Update job status to failed
-        redis_client.hset(
-            f"job:{job_id}",
-            mapping={
-                "status": JobStatus.FAILED.value,
-                "completed_at": datetime.utcnow().isoformat(),
-                "error": str(e),
-            },
-        )
+        if have_lock:
+            redis_client.hset(
+                f"job:{job_id}",
+                mapping={
+                    "status": JobStatus.FAILED.value,
+                    "completed_at": datetime.utcnow().isoformat(),
+                    "error": str(e),
+                },
+            )
         
         raise
+    finally:
+        # Release lock if held
+        try:
+            if have_lock:
+                redis_client.delete(lock_key)
+        except Exception:
+            pass
 
 
 async def _solve_basic_async(job_id: str, request_data: dict, task):

@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # Provider-specific settings
     openai_max_retries: int = Field(default=3, description="Maximum retries for OpenAI API calls")
     openai_timeout: Optional[int] = Field(default=None, description="Timeout for OpenAI API calls in seconds (None = unlimited, fallback to 3 hours)")
-    openrouter_max_retries: int = Field(default=3, description="Maximum retries for OpenRouter API calls")
+    openrouter_max_retries: int = Field(default=5, env="OPENROUTER_MAX_RETRIES", description="Maximum retries for OpenRouter API calls")
     openrouter_timeout: int = Field(default=900, description="Timeout for OpenRouter API calls in seconds (15 minutes)")
     lmstudio_max_retries: int = Field(default=3, description="Maximum retries for LMStudio API calls")
     lmstudio_timeout: int = Field(default=600, description="Timeout for LMStudio API calls in seconds (10 minutes)")

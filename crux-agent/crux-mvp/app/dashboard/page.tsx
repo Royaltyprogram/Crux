@@ -10,7 +10,7 @@ import { formatDuration, formatTokens } from "@/lib/api";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export default function DashboardPage() {
-  const { tasks, loading, error, cancelTask, refreshTasks } = useTasks();
+  const { tasks, loading, error, cancelTask, purgeTask, refreshTasks } = useTasks();
   const [cancelling, setCancelling] = useState<string | null>(null);
 
   // Check if there are any running or pending tasks
@@ -21,11 +21,30 @@ export default function DashboardPage() {
   const handleCancelTask = async (taskId: string) => {
     try {
       setCancelling(taskId);
-      await cancelTask(taskId);
+      // Try backend cancel (best effort)
+      try {
+        await cancelTask(taskId);
+      } catch (_) {/* ignore */}
+
+      // Always purge locally/serverside to remove from list
+      try {
+        await purgeTask(taskId);
+      } catch (_) {/* ignore */}
     } catch (err) {
       console.error("Failed to cancel task:", err);
     } finally {
       setCancelling(null);
+    }
+  };
+
+  const handleDeleteTask = async (taskId: string) => {
+    if (!confirm("Permanently delete this task? This cannot be undone.")) {
+      return;
+    }
+    try {
+      await purgeTask(taskId);
+    } catch (err) {
+      console.error("Failed to delete task:", err);
     }
   };
 
@@ -295,13 +314,15 @@ export default function DashboardPage() {
                         </Button>
                       </>
                     ) : (
-                      <Button
-                        variant="outline"
-                        disabled
-                        className="font-mono border-gray-300 text-gray-400 px-4 py-2 text-sm cursor-not-allowed bg-transparent"
-                      >
-                        {task.status === "failed" ? "Failed" : "Cancelled"}
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={() => handleDeleteTask(task.id)}
+                          variant="outline"
+                          className="font-mono border-gray-300 text-gray-600 hover:bg-gray-200 px-4 py-2 text-sm bg-transparent"
+                        >
+                          Delete
+                        </Button>
+                      </div>
                     )}
                   </div>
                 </div>

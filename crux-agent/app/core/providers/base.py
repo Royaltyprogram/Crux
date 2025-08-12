@@ -4,6 +4,7 @@ Base provider interface for LLM interactions.
 import asyncio
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
+from contextvars import ContextVar
 
 import httpx
 from tenacity import (
@@ -17,6 +18,31 @@ from tenacity import (
 from app.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Context to propagate job_id through async call stacks so providers can access it
+_current_job_id: ContextVar[Optional[str]] = ContextVar("current_job_id", default=None)
+
+def set_current_job_id(job_id: Optional[str]):
+    """Set the current job_id for downstream provider calls; returns a token for reset()."""
+    try:
+        return _current_job_id.set(job_id)
+    except Exception:
+        return None
+
+def reset_current_job_id(token) -> None:
+    """Reset the current job_id using the token returned by set_current_job_id()."""
+    try:
+        if token is not None:
+            _current_job_id.reset(token)
+    except Exception:
+        pass
+
+def get_current_job_id() -> Optional[str]:
+    """Get the current job_id for this async context, if any."""
+    try:
+        return _current_job_id.get()
+    except Exception:
+        return None
 
 
 class ProviderError(Exception):
@@ -110,7 +136,7 @@ class BaseProvider(ABC):
     @retry(
         retry=retry_if_exception_type((httpx.TimeoutException, httpx.HTTPStatusError)),
         stop=stop_after_attempt(3),
-        wait=wait_random_exponential(min=1, max=5),
+        wait=wait_random_exponential(min=0.2, max=2),
         before_sleep=lambda retry_state: BaseProvider._log_retry_attempt(None, retry_state),
     )
     async def _make_request(

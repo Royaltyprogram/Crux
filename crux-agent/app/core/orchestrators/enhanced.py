@@ -53,6 +53,12 @@ class EnhancedRunner:
         
         # Create Professor (always uses Quality-First approach)
         self.professor = ProfessorAgent(provider=provider)
+        # Propagate specialist iteration limit so Professor honors request overrides
+        try:
+            setattr(self.professor, 'specialist_max_iters', self.max_iters_per_specialist)
+        except Exception:
+            # Best-effort; fallback to Professor default if attribute cannot be set
+            pass
         
         # Create shared evaluator and refiner for specialists
         self.evaluator = EvaluatorAgent(provider=provider)
@@ -126,7 +132,9 @@ class EnhancedRunner:
             if self._cancelled:
                 return
             iter_progress = (current_iter - 1) / max_iters if max_iters > 0 else 0
-            update_phase_progress(iter_progress, f"Professor analysis: {phase}")
+            # Stream latest known reasoning tokens (from last completed generation)
+            reasoning_tokens = getattr(self.professor, 'last_reasoning_tokens', 0)
+            update_phase_progress(iter_progress, f"Professor analysis: {phase}", reasoning_tokens)
         
         # Create Professor's Self-Evolve engine with progress callback
         professor_engine = SelfEvolve(
@@ -187,16 +195,26 @@ class EnhancedRunner:
         
         # Extract specialist consultation results from Professor's evolution history
         specialist_results = []
+        seen_results = set()  # Deduplicate across history vs final metadata
         total_specialist_tokens = 0
         total_reasoning_tokens = 0
+        context_summarized_any = bool(professor_solution.metadata.get("context_summarized", False))
+        context_truncated_any = bool(professor_solution.metadata.get("context_truncated", False))
         
         for iteration in professor_solution.evolution_history:
             if "specialist_results" in iteration.get("metadata", {}).get("generator", {}):
                 results = iteration["metadata"]["generator"]["specialist_results"]
-                specialist_results.extend(results)
-                
-                # Aggregate specialist tokens and reasoning tokens
+                # Aggregate specialist tokens and reasoning tokens, with dedup
                 for result in results:
+                    key = (
+                        result.get("specialization"),
+                        result.get("task"),
+                        result.get("final_answer_value") or result.get("final_answer") or result.get("output"),
+                    )
+                    if key in seen_results:
+                        continue
+                    seen_results.add(key)
+                    specialist_results.append(result)
                     specialist_tokens = result.get("metadata", {}).get("total_tokens", 0)
                     total_specialist_tokens += specialist_tokens
                     
@@ -207,6 +225,12 @@ class EnhancedRunner:
                         total_reasoning_tokens += reasoning_tokens
                         # Update partial progress with reasoning tokens per iteration
                         update_phase_progress(0.5, "Specialist consultation in progress", reasoning_tokens)
+                    # Aggregate context flags from specialist result metadata
+                    md = result.get("metadata", {}) or {}
+                    if md.get("context_summarized"):
+                        context_summarized_any = True
+                    if md.get("context_truncated"):
+                        context_truncated_any = True
             
             # Also aggregate reasoning tokens from Professor iterations
             professor_metadata = iteration.get("metadata", {}).get("generator", {})
@@ -215,10 +239,17 @@ class EnhancedRunner:
         # Also check the final metadata
         if "specialist_results" in professor_solution.metadata:
             results = professor_solution.metadata["specialist_results"]
-            specialist_results.extend(results)
-            
-            # Aggregate specialist tokens and reasoning tokens from final metadata
+            # Aggregate specialist tokens and reasoning tokens from final metadata with dedup
             for result in results:
+                key = (
+                    result.get("specialization"),
+                    result.get("task"),
+                    result.get("final_answer_value") or result.get("final_answer") or result.get("output"),
+                )
+                if key in seen_results:
+                    continue
+                seen_results.add(key)
+                specialist_results.append(result)
                 specialist_tokens = result.get("metadata", {}).get("total_tokens", 0)
                 total_specialist_tokens += specialist_tokens
                 
@@ -226,6 +257,12 @@ class EnhancedRunner:
                 session_details = result.get("session_details", {})
                 for session_iter in session_details.get("iterations", []):
                     total_reasoning_tokens += session_iter.get("reasoning_tokens", 0)
+                # Aggregate context flags from specialist result metadata
+                md = result.get("metadata", {}) or {}
+                if md.get("context_summarized"):
+                    context_summarized_any = True
+                if md.get("context_truncated"):
+                    context_truncated_any = True
         
         logger.info(f"Professor completed with {len(specialist_results)} specialist consultations")
         logger.info(f"Total specialist tokens: {total_specialist_tokens}, Professor tokens: {professor_solution.total_tokens}")
@@ -251,6 +288,9 @@ class EnhancedRunner:
             "professor_tokens": professor_solution.total_tokens,
             "specialist_tokens": total_specialist_tokens,
             "reasoning_tokens": total_reasoning_tokens,
+            # Surface context pressure flags aggregated across professor and specialists
+            "context_summarized": context_summarized_any,
+            "context_truncated": context_truncated_any,
         })
         
         # Update the total tokens in the solution

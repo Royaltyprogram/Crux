@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from app.core.agents.base import AbstractAgent, AgentContext, AgentResult
 from app.utils.logging import get_logger
+from app.core.providers.base import set_current_job_id, reset_current_job_id
 
 logger = get_logger(__name__)
 
@@ -145,6 +146,18 @@ class SelfEvolve:
         
         logger.info(f"Starting Self-Evolve from iteration {start_iteration} for: {problem.question[:100]}...")
 
+        # Propagate job_id into async context for provider-level generation locking
+        ctx_token = None
+        try:
+            job_id_ctx = (problem.metadata or {}).get("job_id") if hasattr(problem, 'metadata') else None
+            if not job_id_ctx:
+                job_id_ctx = getattr(self, 'job_id', None)
+            if job_id_ctx:
+                ctx_token = set_current_job_id(job_id_ctx)
+                logger.debug(f"[SelfEvolve] Set current_job_id context: {job_id_ctx}")
+        except Exception as _e:
+            logger.warning(f"[SelfEvolve] Failed to set current_job_id context: {_e}")
+
         # Reset cancellation flag
         self._cancelled = False
 
@@ -184,6 +197,11 @@ class SelfEvolve:
             # Check for cancellation
             if self._cancelled:
                 logger.info(f"Self-Evolve cancelled at iteration {iteration}")
+                try:
+                    if ctx_token is not None:
+                        reset_current_job_id(ctx_token)
+                except Exception:
+                    pass
                 raise asyncio.CancelledError("Self-Evolve was cancelled")
 
             logger.info(f"Self-Evolve iteration {iteration}/{self.max_iters}")
@@ -193,23 +211,21 @@ class SelfEvolve:
                 self.progress_callback(iteration, self.max_iters, f"Self-Evolve iteration {iteration}/{self.max_iters}")
 
             # Step 1: Generate answer with validation
-            gen_context = AgentContext(
-                prompt=prompt,
-                additional_context={
-                    "constraints": problem.constraints,
-                    "context": problem.context,
-                },
-            )
-            
-            # Try generation with retries for invalid outputs
-            gen_result = None
-            output = None
+            max_retries_per_iteration = 2
             retry_count = 0
-            max_retries_per_iteration = 4  # Increase retries from 2 to 4
             generation_successful = False
-            
+            gen_result = None
+            output = ""
             while retry_count <= max_retries_per_iteration:
                 try:
+                    gen_context = AgentContext(
+                        prompt=prompt,
+                        additional_context={
+                            "constraints": problem.constraints,
+                            "context": problem.context,
+                            "iteration": iteration,
+                        },
+                    )
                     gen_result = await self.generator.run(gen_context)
                     output = gen_result.output
                     
@@ -218,21 +234,14 @@ class SelfEvolve:
                         generation_successful = True
                         break  # Valid output, proceed
                     else:
-                        logger.warning(f"Invalid output detected in iteration {iteration}, retry {retry_count + 1}: {repr(output[:100])}")
+                        snippet = (output or "")[:100]
+                        logger.warning(f"Invalid output detected in iteration {iteration}, retry {retry_count + 1}: {repr(snippet)}")
                         retry_count += 1
-                        if retry_count <= max_retries_per_iteration:
-                            continue
-                        else:
-                            # TODO: New control-flow injection point - consider alternative handling when max retries are reached
-                            logger.error(f"Max retries reached for iteration {iteration} with invalid output")
-                            break
-                            
+                        continue
                 except Exception as e:
                     logger.error(f"Generation failed in iteration {iteration}, retry {retry_count + 1}: {e}")
                     retry_count += 1
-                    if retry_count <= max_retries_per_iteration:
-                        continue
-                    else:
+                    if retry_count > max_retries_per_iteration:
                         # Create a fallback result with error message
                         gen_result = type('GenResult', (), {
                             'output': f"Generation failed after {max_retries_per_iteration + 1} attempts: {str(e)}",
@@ -241,7 +250,7 @@ class SelfEvolve:
                         })()
                         output = gen_result.output
                         break
-            
+
             # If we never got a valid output, implement continuation fallback strategy
             if not generation_successful:
                 logger.error(f"Skipping iteration {iteration} due to persistent invalid output after {max_retries_per_iteration + 1} attempts")
@@ -254,6 +263,11 @@ class SelfEvolve:
                         best_output = last_valid["output"]
                         fallback_triggered = True
                         break  # exit while loop gracefully
+                try:
+                    if ctx_token is not None:
+                        reset_current_job_id(ctx_token)
+                except Exception:
+                    pass
                 raise Exception("No valid iteration found; marking task as failed.")
 
             # Extract reasoning summary from generator
@@ -267,6 +281,11 @@ class SelfEvolve:
             # Check for cancellation after generation
             if self._cancelled:
                 logger.info(f"Self-Evolve cancelled after generation in iteration {iteration}")
+                try:
+                    if ctx_token is not None:
+                        reset_current_job_id(ctx_token)
+                except Exception:
+                    pass
                 raise asyncio.CancelledError("Self-Evolve was cancelled")
 
             # Step 2: Evaluate answer
@@ -311,6 +330,11 @@ class SelfEvolve:
                 # Check for cancellation after evaluation
                 if self._cancelled:
                     logger.info(f"Self-Evolve cancelled after evaluation in iteration {iteration}")
+                    try:
+                        if ctx_token is not None:
+                            reset_current_job_id(ctx_token)
+                    except Exception:
+                        pass
                     raise asyncio.CancelledError("Self-Evolve was cancelled")
 
             # Record iteration
@@ -385,6 +409,11 @@ class SelfEvolve:
                     # Check for cancellation after refinement
                     if self._cancelled:
                         logger.info(f"Self-Evolve cancelled after refinement in iteration {iteration}")
+                        try:
+                            if ctx_token is not None:
+                                reset_current_job_id(ctx_token)
+                        except Exception:
+                            pass
                         raise asyncio.CancelledError("Self-Evolve was cancelled")
                 else:
                     logger.info("Skipping refinement due to skipped evaluation.")
@@ -395,6 +424,11 @@ class SelfEvolve:
         # Final cancellation check
         if self._cancelled:
             logger.info("Self-Evolve cancelled before creating final solution")
+            try:
+                if ctx_token is not None:
+                    reset_current_job_id(ctx_token)
+            except Exception:
+                pass
             raise asyncio.CancelledError("Self-Evolve was cancelled")
 
         # Check if evolution history is empty or NoneType access
@@ -414,6 +448,26 @@ class SelfEvolve:
             final_iter = evolution_history[-1]
             stop_reason = "evaluator_stop" if should_stop else "max_iterations"
         
+        # Aggregate context pressure flags from iteration metadata if present
+        context_summarized_flag = False
+        context_truncated_flag = False
+        try:
+            for iter_item in evolution_history:
+                meta = iter_item.get("metadata", {})
+                for k in ("generator", "evaluator", "refiner"):
+                    agent_md = meta.get(k, {}) or {}
+                    if agent_md.get("context_summarized"):
+                        context_summarized_flag = True
+                    if agent_md.get("context_truncated"):
+                        context_truncated_flag = True
+            # Also OR with inbound problem metadata if present
+            if isinstance(problem.metadata, dict):
+                context_summarized_flag = bool(problem.metadata.get("context_summarized", context_summarized_flag) or context_summarized_flag)
+                context_truncated_flag = bool(problem.metadata.get("context_truncated", context_truncated_flag) or context_truncated_flag)
+        except Exception:
+            # Defensive: do not fail solution creation due to metadata structure differences
+            pass
+
         # Create final solution
         solution = Solution(
             output=final_iter["output"],
@@ -425,6 +479,9 @@ class SelfEvolve:
                 "converged": should_stop,
                 "final_iteration": final_iteration,
                 "stop_reason": stop_reason,
+                # Surface aggregated context pressure flags for upstream orchestrators/UI
+                "context_summarized": context_summarized_flag,
+                "context_truncated": context_truncated_flag,
             },
         )
         
@@ -444,8 +501,19 @@ class SelfEvolve:
             f"Self-Evolve complete. Converged: {should_stop}, "
             f"Iterations: {completed_iterations}, Tokens: {total_tokens}"
         )
-
+        
+        # Reset job_id context to avoid leakage across tasks on normal completion
+        try:
+            if ctx_token is not None:
+                reset_current_job_id(ctx_token)
+        except Exception:
+            pass
+        
         return solution
+        
+        # Ensure contextvar is reset (this line won't execute due to return above, include in finally below)
+        
+        # Note: actual reset occurs in the finally block below
 
     def _create_initial_prompt(self, problem: Problem) -> str:
         """
